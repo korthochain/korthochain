@@ -52,8 +52,6 @@ type DB interface {
 
 	NewTransaction() Transaction
 	NewIterator([]byte, []byte) Iterator
-
-	//	NewState() StateTransaction
 }
 
 type Transaction interface {

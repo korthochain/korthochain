@@ -7,17 +7,6 @@ import (
 	"github.com/dgraph-io/badger"
 )
 
-/*
-func New(name string) store.DB {
-	opts := badger.DefaultOptions(name)
-	if db, err := badger.Open(opts); err != nil {
-		fmt.Println("Open database error:", err)
-		return nil
-	} else {
-		return &bgStore{db}
-	}
-}*/
-
 func New(db *badger.DB) store.DB {
 	return &bgStore{db}
 }
