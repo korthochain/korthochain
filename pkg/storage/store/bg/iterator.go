@@ -2,7 +2,7 @@ package bg
 
 import (
 	"github.com/dgraph-io/badger"
-	"korthochain/pkg/storage/store"
+	"github.com/korthochain/korthochain/pkg/storage/store"
 )
 
 func (db *bgStore) NewIterator(prefix []byte, start []byte) store.Iterator {

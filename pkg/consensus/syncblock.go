@@ -3,9 +3,10 @@ package consensus
 
 import (
 	"encoding/hex"
-	"korthochain/pkg/block"
-	"korthochain/pkg/blockchain"
 	"time"
+
+	"github.com/korthochain/korthochain/pkg/block"
+	"github.com/korthochain/korthochain/pkg/blockchain"
 )
 
 //hash存在则丢弃块，
