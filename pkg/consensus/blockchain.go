@@ -7,7 +7,9 @@ import (
 	"github.com/korthochain/korthochain/pkg/block"
 )
 
-type Hash []byte
+type Hash [HashSize]byte
+
+const HashSize int = 64
 
 // Blockchain synchronization state management, including adding and
 // removing blocks. The longest blockchain selection, as well as update
@@ -17,8 +19,8 @@ type BlockChain struct {
 	//blockchain  db
 	//accounts db
 
-	Oranphs      map[*Hash]OrphanBlock
-	PrevOrphans  map[*Hash][]OrphanBlock
+	Oranphs      map[Hash]*OrphanBlock
+	PrevOrphans  map[Hash][]*OrphanBlock
 	oldestOrphan *OrphanBlock
 }
 
@@ -36,4 +38,15 @@ func (hash *Hash) IsEqual(target *Hash) bool {
 		return false
 	}
 	return *hash == *target
+}
+
+func BytesToHash(in []byte) Hash {
+
+	var tmp Hash
+
+	for i, b := range in {
+		tmp[i] = b
+	}
+	return tmp
+
 }
