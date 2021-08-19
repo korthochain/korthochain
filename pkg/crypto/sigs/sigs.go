@@ -2,7 +2,8 @@ package sigs
 
 import (
 	"fmt"
-	"korthochain/pkg/crypto"
+
+	"github.com/korthochain/korthochain/pkg/crypto"
 )
 
 func Generate(sigType crypto.SigType) ([]byte, error) {
