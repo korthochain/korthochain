@@ -1,9 +1,10 @@
 package ed25519
 
 import (
-	"korthochain/pkg/crypto"
-	"korthochain/pkg/crypto/sigs"
 	"testing"
+
+	"github.com/korthochain/korthochain/pkg/crypto"
+	"github.com/korthochain/korthochain/pkg/crypto/sigs"
 
 	"github.com/stretchr/testify/require"
 )

@@ -4,8 +4,9 @@ import (
 	ed "crypto/ed25519"
 	"crypto/rand"
 	"errors"
-	"korthochain/pkg/crypto"
-	"korthochain/pkg/crypto/sigs"
+
+	"github.com/korthochain/korthochain/pkg/crypto"
+	"github.com/korthochain/korthochain/pkg/crypto/sigs"
 )
 
 type ED25519Signer struct{}
