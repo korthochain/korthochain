@@ -2,8 +2,9 @@ package consensus
 
 import (
 	/* 	"korthochain/pkg/block" */
-	"korthochain/pkg/block"
 	"time"
+
+	"github.com/korthochain/korthochain/pkg/block"
 )
 
 type Hash []byte

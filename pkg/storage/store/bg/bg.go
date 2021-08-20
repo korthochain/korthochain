@@ -2,8 +2,8 @@ package bg
 
 import (
 	"github.com/dgraph-io/badger"
-	"korthochain/pkg/storage/miscellaneous"
-	"korthochain/pkg/storage/store"
+	"github.com/korthochain/korthochain/pkg/storage/miscellaneous"
+	"github.com/korthochain/korthochain/pkg/storage/store"
 )
 
 func New(db *badger.DB) store.DB {

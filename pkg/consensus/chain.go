@@ -1,8 +1,9 @@
 package consensus
 
 import (
-	"korthochain/pkg/block"
 	"time"
+
+	"github.com/korthochain/korthochain/pkg/block"
 )
 
 //judge block by hash exist

@@ -2,10 +2,11 @@ package bgdb
 
 import (
 	"fmt"
-	"github.com/ethereum/go-ethereum/ethdb"
-	"github.com/syndtr/goleveldb/leveldb/errors"
-	"korthochain/pkg/storage/store"
 	"time"
+
+	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/korthochain/korthochain/pkg/storage/store"
+	"github.com/syndtr/goleveldb/leveldb/errors"
 )
 
 const (
