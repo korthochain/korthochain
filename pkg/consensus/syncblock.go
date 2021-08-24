@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/korthochain/korthochain/pkg/block"
-	"github.com/korthochain/korthochain/pkg/blockchain"
 )
 
 //hash存在则丢弃块，
@@ -29,7 +28,7 @@ func (b *BlockChain) ProcessBlock(newblock block.Block) bool {
 
 	//newblcok hash is exist
 
-	if blockchain.BlockExists(hex.EncodeToString(newblock.Hash)) {
+	if BlockExists(hex.EncodeToString(newblock.Hash)) {
 		return false
 	}
 
@@ -37,9 +36,9 @@ func (b *BlockChain) ProcessBlock(newblock block.Block) bool {
 	/* 	checkBlockRegular() */
 
 	//判断prevhash是否存在，
-	if !blockchain.BlockExists(hex.EncodeToString(newblock.PrevHash)) {
+	if !BlockExists(hex.EncodeToString(newblock.PrevHash)) {
 		//
-		b.AddOrphanBlock()
+		b.AddOrphanBlock(newblock)
 		return false
 	}
 
