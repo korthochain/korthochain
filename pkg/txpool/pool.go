@@ -36,8 +36,8 @@ type IBlockchain interface {
 // Transactions are sorted by GasCap and Nonce in the pool and waiting to be
 // uploaded to the chain.
 type Pool struct {
-	hlock      sync.Mutex
-	h          *orderlyQueue
+	qlock      sync.Mutex
+	q          *orderlyQueue
 	pendingBuf []transaction.SignedTransaction
 	bc         IBlockchain
 
@@ -45,24 +45,33 @@ type Pool struct {
 }
 
 // NewPool Create transaction pool
-func NewPool(cfg Config, bc IBlockchain) *Pool {
-	p := &Pool{
-		bc:         bc,
-		h:          newQueue(),
-		pendingBuf: make([]transaction.SignedTransaction, pendingLimit),
-
-		logger: cfg.logger,
+func NewPool(cfg Config) (*Pool, error) {
+	if cfg.BlockChain == nil {
+		return nil, fmt.Errorf("bc cannot be empty")
 	}
-	return p
+
+	p := &Pool{
+		bc:         cfg.BlockChain,
+		q:          newQueue(),
+		pendingBuf: make([]transaction.SignedTransaction, pendingLimit),
+	}
+
+	if cfg.Logger != nil {
+		p.logger = cfg.Logger
+	} else {
+		p.logger = zap.NewNop()
+	}
+
+	return p, nil
 }
 
 // Add to add a new transaction to the pool, outdated transactions
 // will return an error
 func (p *Pool) Add(st *transaction.SignedTransaction) error {
-	p.hlock.Lock()
-	defer p.hlock.Unlock()
+	p.qlock.Lock()
+	defer p.qlock.Unlock()
 
-	if p.h.len() >= poolCap {
+	if p.q.len() >= poolCap {
 		return fmt.Errorf("pool is full,please try again later")
 	}
 
@@ -71,7 +80,7 @@ func (p *Pool) Add(st *transaction.SignedTransaction) error {
 		return err
 	}
 
-	p.h.push(*st)
+	p.q.push(*st)
 	return nil
 }
 
@@ -97,15 +106,15 @@ func (t *traderInfo) String() string {
 
 // Pending returns the transaction that can be packaged
 func (p *Pool) Pending() ([]transaction.SignedTransaction, error) {
-	p.hlock.Lock()
-	defer p.hlock.Unlock()
+	p.qlock.Lock()
+	defer p.qlock.Unlock()
 
 	traderBuffer := make(map[string]traderInfo)
 	unreadyBuffer := make([]transaction.SignedTransaction, 0)
 
 	i := 0
-	for ; i < pendingLimit && i < p.h.len(); i++ {
-		st := p.h.pop()
+	for ; i < pendingLimit && i < p.q.len(); i++ {
+		st := p.q.pop()
 
 		if n := p.compareNonce(traderBuffer, st.Caller(), st.Nonce()); n < 0 {
 			i--
@@ -131,7 +140,7 @@ func (p *Pool) Pending() ([]transaction.SignedTransaction, error) {
 	p.pendingBuf = p.pendingBuf[:i]
 
 	for _, unready := range unreadyBuffer {
-		p.h.push(unready)
+		p.q.push(unready)
 	}
 
 	return p.pendingBuf, nil
@@ -273,18 +282,18 @@ func (p *Pool) compareNonce(traderBuf map[string]traderInfo, trader address.Addr
 
 // FilterTransaction filter incoming transactions
 func (p *Pool) FilterTransaction(stList []transaction.SignedTransaction) {
-	p.hlock.Lock()
-	defer p.hlock.Unlock()
+	p.qlock.Lock()
+	defer p.qlock.Unlock()
 
 	for _, st := range stList {
-		rstList, ok := p.h.rstBuffer[st.Caller().String()]
+		rstList, ok := p.q.rstBuffer[st.Caller().String()]
 		if !ok {
 			continue
 		}
 
 		for _, rst := range rstList {
 			if st.Nonce() == rst.nonce {
-				p.h.remove(rst.idx)
+				p.q.remove(rst.idx)
 			}
 		}
 	}
@@ -292,13 +301,13 @@ func (p *Pool) FilterTransaction(stList []transaction.SignedTransaction) {
 
 // TransctionCacheOut  Eliminate transactions in the transaction pool
 func (p *Pool) CacheOutSignedTransaction() error {
-	p.hlock.Lock()
-	defer p.hlock.Unlock()
+	p.qlock.Lock()
+	defer p.qlock.Unlock()
 
-	if p.h.len() > poolCap/2 {
-		for i := p.h.len() / 2; i < p.h.len(); i++ {
-			st := p.h.stList[i]
-			rst, err := p.h.getIndex(st.Caller().String(), st.Nonce())
+	if p.q.len() > poolCap/2 {
+		for i := p.q.len() / 2; i < p.q.len(); i++ {
+			st := p.q.stList[i]
+			rst, err := p.q.getIndex(st.Caller().String(), st.Nonce())
 			if err != nil {
 				return err
 			}
@@ -307,7 +316,7 @@ func (p *Pool) CacheOutSignedTransaction() error {
 				break
 			}
 
-			p.h.remove(i)
+			p.q.remove(i)
 		}
 	}
 

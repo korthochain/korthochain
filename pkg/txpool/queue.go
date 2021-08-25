@@ -32,43 +32,43 @@ func newQueue() *orderlyQueue {
 	}
 }
 
-func (h *orderlyQueue) len() int {
-	return len(h.stList)
+func (q *orderlyQueue) len() int {
+	return len(q.stList)
 }
-func (h *orderlyQueue) push(st transaction.SignedTransaction) {
+func (q *orderlyQueue) push(st transaction.SignedTransaction) {
 
-	if rstList, ok := h.rstBuffer[st.Caller().String()]; ok {
+	if rstList, ok := q.rstBuffer[st.Caller().String()]; ok {
 		for _, rst := range rstList {
 			if rst.nonce == st.Nonce() {
 				if rst.price >= st.GasCap() {
 					return
 				}
 
-				h.update(st.Caller().String(), rst.nonce, withPrice(st.GasCap()), withTimestamp(time.Now().Second()))
-				h.stList[rst.idx] = st
-				for i := rst.idx; i < h.len(); i++ {
-					h.down(i, h.len()-1)
+				q.update(st.Caller().String(), rst.nonce, withPrice(st.GasCap()), withTimestamp(time.Now().Second()))
+				q.stList[rst.idx] = st
+				for i := rst.idx; i < q.len(); i++ {
+					q.down(i, q.len()-1)
 				}
 				return
 			}
 		}
 	}
 
-	h.stList = append(h.stList, st)
-	h.addRstBuffer(st.Caller().String(), receivedTransaction{st.Nonce(), option{h.len() - 1, st.GasCap(), time.Now().Second()}})
-	h.up(h.len() - 1)
+	q.stList = append(q.stList, st)
+	q.addRstBuffer(st.Caller().String(), receivedTransaction{st.Nonce(), option{q.len() - 1, st.GasCap(), time.Now().Second()}})
+	q.up(q.len() - 1)
 }
 
-func (h *orderlyQueue) pop() transaction.SignedTransaction {
-	st := h.stList[h.len()-1]
-	h.rmRecivedTransaction(st.Caller().String(), h.len()-1)
-	h.stList = h.stList[:h.len()-1]
+func (q *orderlyQueue) pop() transaction.SignedTransaction {
+	st := q.stList[q.len()-1]
+	q.rmRecivedTransaction(st.Caller().String(), q.len()-1)
+	q.stList = q.stList[:q.len()-1]
 
 	return st
 }
 
-func (h *orderlyQueue) getIndex(caller string, nonce uint64) (receivedTransaction, error) {
-	rstList := h.rstBuffer[caller]
+func (q *orderlyQueue) getIndex(caller string, nonce uint64) (receivedTransaction, error) {
+	rstList := q.rstBuffer[caller]
 	for x := 0; x < len(rstList); x++ {
 		if rstList[x].nonce == nonce {
 			return rstList[x], nil
@@ -77,66 +77,66 @@ func (h *orderlyQueue) getIndex(caller string, nonce uint64) (receivedTransactio
 	return receivedTransaction{}, fmt.Errorf("not exist")
 }
 
-func (h *orderlyQueue) remove(idx int) {
-	if idx < 0 || idx >= h.len() {
+func (q *orderlyQueue) remove(idx int) {
+	if idx < 0 || idx >= q.len() {
 		return
 	}
-	h.rmRecivedTransaction(h.stList[idx].Caller().String(), idx)
+	q.rmRecivedTransaction(q.stList[idx].Caller().String(), idx)
 
-	for i := idx + 1; i < h.len(); i++ {
-		h.update(h.stList[i].Caller().String(), h.stList[i].Nonce(), withIdx(i-1))
-		h.stList[i-1] = h.stList[i]
+	for i := idx + 1; i < q.len(); i++ {
+		q.update(q.stList[i].Caller().String(), q.stList[i].Nonce(), withIdx(i-1))
+		q.stList[i-1] = q.stList[i]
 	}
-	h.stList = h.stList[:h.len()-1]
+	q.stList = q.stList[:q.len()-1]
 
 	for i := idx - 1; i >= 0; i-- {
-		h.down(i, h.len()-1)
+		q.down(i, q.len()-1)
 	}
 }
 
-func (h *orderlyQueue) up(j int) {
+func (q *orderlyQueue) up(j int) {
 	if j < 0 {
 		return
 	}
 
 	i := j - 1
-	value := h.stList[j]
+	value := q.stList[j]
 
 	for ; i >= 0; i-- {
-		if !h.less(i, value) {
+		if !q.less(i, value) {
 			break
 		}
 
-		h.update(h.stList[i].Caller().String(), h.stList[i].Nonce(), withIdx(i+1))
-		h.stList[i+1] = h.stList[i]
+		q.update(q.stList[i].Caller().String(), q.stList[i].Nonce(), withIdx(i+1))
+		q.stList[i+1] = q.stList[i]
 	}
 
-	h.update(value.Caller().String(), value.Nonce(), withIdx(i+1))
-	h.stList[i+1] = value
+	q.update(value.Caller().String(), value.Nonce(), withIdx(i+1))
+	q.stList[i+1] = value
 }
 
-func (h *orderlyQueue) down(i, j int) {
-	value := h.stList[i]
+func (q *orderlyQueue) down(i, j int) {
+	value := q.stList[i]
 	i += 1
 	for ; i <= j; i++ {
-		if h.less(i, value) {
+		if q.less(i, value) {
 			break
 		}
 
-		h.update(h.stList[i].Caller().String(), h.stList[i].Nonce(), withIdx(i-1))
-		h.stList[i-1] = h.stList[i]
+		q.update(q.stList[i].Caller().String(), q.stList[i].Nonce(), withIdx(i-1))
+		q.stList[i-1] = q.stList[i]
 	}
 
-	h.update(value.Caller().String(), value.Nonce(), withIdx(i-1))
-	h.stList[i-1] = value
+	q.update(value.Caller().String(), value.Nonce(), withIdx(i-1))
+	q.stList[i-1] = value
 }
 
-func (h *orderlyQueue) addRstBuffer(caller string, rst receivedTransaction) {
-	if _, ok := h.rstBuffer[caller]; !ok {
-		h.rstBuffer[caller] = []receivedTransaction{rst}
+func (q *orderlyQueue) addRstBuffer(caller string, rst receivedTransaction) {
+	if _, ok := q.rstBuffer[caller]; !ok {
+		q.rstBuffer[caller] = []receivedTransaction{rst}
 		return
 	}
-	h.rstBuffer[caller] = append(h.rstBuffer[caller], rst)
+	q.rstBuffer[caller] = append(q.rstBuffer[caller], rst)
 }
 
 type modOption func(option *option)
@@ -159,8 +159,8 @@ func withTimestamp(timestamp int) modOption {
 	}
 }
 
-func (h *orderlyQueue) update(caller string, nonce uint64, modOptions ...modOption) {
-	rstList := h.rstBuffer[caller]
+func (q *orderlyQueue) update(caller string, nonce uint64, modOptions ...modOption) {
+	rstList := q.rstBuffer[caller]
 	for x := 0; x < len(rstList); x++ {
 		if rstList[x].nonce == nonce {
 			for _, fn := range modOptions {
@@ -169,11 +169,11 @@ func (h *orderlyQueue) update(caller string, nonce uint64, modOptions ...modOpti
 			break
 		}
 	}
-	h.rstBuffer[caller] = rstList
+	q.rstBuffer[caller] = rstList
 }
 
-func (h *orderlyQueue) rmRecivedTransaction(caller string, idx int) {
-	rstList := h.rstBuffer[caller]
+func (q *orderlyQueue) rmRecivedTransaction(caller string, idx int) {
+	rstList := q.rstBuffer[caller]
 
 	for i := 0; i < len(rstList); i++ {
 		if rstList[i].idx == idx {
@@ -183,21 +183,21 @@ func (h *orderlyQueue) rmRecivedTransaction(caller string, idx int) {
 	}
 
 	if len(rstList) == 0 {
-		delete(h.rstBuffer, caller)
+		delete(q.rstBuffer, caller)
 	} else {
-		h.rstBuffer[caller] = rstList
+		q.rstBuffer[caller] = rstList
 	}
 }
 
 // y <=  x ture
 // y > x false
-func (h *orderlyQueue) less(i int, y transaction.SignedTransaction) bool {
-	x := h.stList[i]
+func (q *orderlyQueue) less(i int, y transaction.SignedTransaction) bool {
+	x := q.stList[i]
 	if y.Caller().String() == x.Caller().String() {
 		return y.Nonce() > x.Nonce()
 	}
 
-	rstList := h.rstBuffer[y.Caller().String()]
+	rstList := q.rstBuffer[y.Caller().String()]
 	if len(rstList) == 1 {
 		return y.GasCap() <= x.GasCap()
 	}
