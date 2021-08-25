@@ -35,6 +35,7 @@ func TestCodec(t *testing.T) {
 	}
 
 	siganature, err := sigs.Sign(crypto.ED25519, fromPriv, tx.SignHash())
+
 	assert.NoError(err)
 
 	st := SignedTransaction{
