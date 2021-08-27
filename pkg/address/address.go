@@ -100,7 +100,7 @@ func encode(network NetWork, addr Address) (string, error) {
 		return Undef.string, fmt.Errorf("unknown address network")
 	}
 
-	return prefix + addrcodec.Encode([]byte(addr.string)), nil
+	return prefix + addrcodec.EncodeAddr([]byte(addr.string)), nil
 }
 
 func decode(str string) (Address, error) {

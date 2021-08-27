@@ -10,7 +10,7 @@ import (
 
 func TestStHeappush(t *testing.T) {
 	assert := assert.New(t)
-	h := newQueue()
+	q := newQueue()
 
 	addr1, _ := address.NewAddrFromString("otKG7B6mFNNHHLNqLCbFMhz2bbwPJuRv4fMbthXJtcaCAJq")
 	addr2, _ := address.NewAddrFromString("otKFVuKvsDLUb5zWMutcroqs8WiocjgmWuF55WE4GYvfhvA")
@@ -34,12 +34,12 @@ func TestStHeappush(t *testing.T) {
 
 		inputIdx := []int{0, 1, 2, 3, 4, 5}
 		for _, idx := range inputIdx {
-			h.push(srcList[idx])
+			q.push(srcList[idx])
 		}
 
 		outputIdx := []int{1, 4, 3, 0, 5, 2}
 		for _, idx := range outputIdx {
-			maybe := h.pop()
+			maybe := q.pop()
 			assert.Equal(srcList[idx].GasCap(), maybe.GasCap())
 		}
 	}
@@ -48,12 +48,12 @@ func TestStHeappush(t *testing.T) {
 	{
 		inputIdx := []int{0, 1, 2, 3, 4, 5, 6}
 		for _, idx := range inputIdx {
-			h.push(srcList[idx])
+			q.push(srcList[idx])
 		}
 
 		outputIdx := []int{1, 6, 4, 0, 5, 2}
 		for _, idx := range outputIdx {
-			maybe := h.pop()
+			maybe := q.pop()
 			assert.Equal(srcList[idx].GasCap(), maybe.GasCap())
 		}
 	}
@@ -62,13 +62,13 @@ func TestStHeappush(t *testing.T) {
 	{
 		inputIdx := []int{0, 1, 2, 3, 4, 5, 6}
 		for _, idx := range inputIdx {
-			h.push(srcList[idx])
+			q.push(srcList[idx])
 		}
 
-		h.remove(2)
+		q.remove(2)
 		outputIdx := []int{1, 6, 4, 5, 2}
 		for _, idx := range outputIdx {
-			maybe := h.pop()
+			maybe := q.pop()
 			assert.Equal(srcList[idx].GasCap(), maybe.GasCap())
 		}
 	}
@@ -77,14 +77,14 @@ func TestStHeappush(t *testing.T) {
 	{
 		inputIdx := []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
 		for _, idx := range inputIdx {
-			h.push(srcList[idx])
+			q.push(srcList[idx])
 		}
 
-		h.remove(2)
+		q.remove(2)
 
 		outputIdx := []int{10, 8, 1, 6, 4, 7, 0, 9}
 		for _, idx := range outputIdx {
-			maybe := h.pop()
+			maybe := q.pop()
 			assert.Equal(srcList[idx].GasCap(), maybe.GasCap())
 		}
 	}
