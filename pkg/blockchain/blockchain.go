@@ -6,22 +6,23 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/dgraph-io/badger"
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/state"
-	"go.uber.org/zap"
-	"korthochain/pkg/block"
-	"korthochain/pkg/logger"
-	"korthochain/pkg/storage/merkle"
-	"korthochain/pkg/storage/miscellaneous"
-	"korthochain/pkg/storage/store"
-	"korthochain/pkg/storage/store/bg"
-	"korthochain/pkg/storage/store/bg/bgdb"
-	"korthochain/pkg/transaction"
-	"korthochain/pkg/types"
 	"math/big"
 	"sync"
 	"time"
+
+	"github.com/dgraph-io/badger"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/korthochain/korthochain/pkg/address"
+	"github.com/korthochain/korthochain/pkg/block"
+	"github.com/korthochain/korthochain/pkg/logger"
+	"github.com/korthochain/korthochain/pkg/storage/merkle"
+	"github.com/korthochain/korthochain/pkg/storage/miscellaneous"
+	"github.com/korthochain/korthochain/pkg/storage/store"
+	"github.com/korthochain/korthochain/pkg/storage/store/bg"
+	"github.com/korthochain/korthochain/pkg/storage/store/bg/bgdb"
+	"github.com/korthochain/korthochain/pkg/transaction"
+	"go.uber.org/zap"
 )
 
 const (
@@ -51,8 +52,8 @@ type Blockchain struct {
 	sdb *state.StateDB
 }
 
-// TXindex transaction data index structure
-type TXindex struct {
+// TxIndex transaction data index structure
+type TxIndex struct {
 	Height uint64
 	Index  uint64
 }
@@ -62,7 +63,11 @@ func New(db *badger.DB) (*Blockchain, error) {
 	bgs := bg.New(db)
 	cdb := bgdb.NewBadgerDatabase(bgs)
 	sdb := state.NewDatabase(cdb)
-	root := getSnapRoot(bgs)
+	root, err := getSnapRoot(bgs)
+	if err != nil {
+		logger.Error("failed to getSnapRoot")
+		return nil, err
+	}
 	stdb, err := state.New(root, sdb, nil)
 	if err != nil {
 		logger.Error("failed to new state")
@@ -113,27 +118,28 @@ func setFreezeBalance(s *state.StateDB, addr, freezeBal []byte) error {
 }
 
 // setAccount set the balance of the corresponding account
-func setAccount(sdb *state.StateDB, tx *transaction.Transaction) error {
-	from, to := tx.From.Bytes(), tx.To.Bytes()
+func setAccount(sdb *state.StateDB, tx *transaction.SignedTransaction) error {
+	from, to := tx.Transaction.From.Bytes(), tx.Transaction.To.Bytes()
 
 	fromCA := miscellaneous.BytesSha1Address(from)
 	fromBalBig := sdb.GetBalance(fromCA)
 	fromBalance := fromBalBig.Uint64()
 
-	gas := tx.GasLimit * tx.GasPrice
-	if fromBalance < tx.Amount+gas {
+	gas := tx.Transaction.GasLimit * tx.Transaction.GasPrice
+	hash := tx.Hash()
+	if fromBalance < tx.Transaction.Amount+gas {
 		return fmt.Errorf("not sufficient funds,hash:%s,from balance(%d) < amount(%d) + gas(%d)",
-			hex.EncodeToString(tx.Hash), fromBalance, tx.Amount, gas)
+			hex.EncodeToString(hash), fromBalance, tx.Transaction.Amount, gas)
 	}
-	fromBalance -= tx.Amount + gas
+	fromBalance -= tx.Transaction.Amount + gas
 
 	toCA := miscellaneous.BytesSha1Address(to)
 	tobalance := sdb.GetBalance(toCA)
 	toBalance := tobalance.Uint64()
-	if MAXUINT64-toBalance-gas < tx.Amount {
-		return fmt.Errorf("amount is too large,hash:%s,max int64(%d)-balance(%d)-gas(%d) < amount(%d)", tx.Hash, MAXUINT64, toBalance, gas, tx.Amount)
+	if MAXUINT64-toBalance-gas < tx.Transaction.Amount {
+		return fmt.Errorf("amount is too large,hash:%s,max int64(%d)-balance(%d)-gas(%d) < amount(%d)", hash, MAXUINT64, toBalance, gas, tx.Transaction.Amount)
 	}
-	toBalance += tx.Amount
+	toBalance += tx.Transaction.Amount
 
 	Frombytes := miscellaneous.E64func(fromBalance)
 	Tobytes := miscellaneous.E64func(toBalance)
@@ -327,35 +333,6 @@ func (bc *Blockchain) getBlockByheight(height uint64) (*block.Block, error) {
 	return block.Deserialize(blockData)
 }
 
-// GetTransactions get all transactions from start to end
-func (bc *Blockchain) GetTransactions(address []byte, start, end int64) ([]*transaction.Transaction, error) {
-	bc.mu.RLock()
-	defer bc.mu.RUnlock()
-	txHashList, err := bc.db.Mkeys(address)
-	if err != nil {
-		logger.Error("failed to get addrhashlist", zap.Error(err))
-		return nil, err
-	}
-
-	transactions := make([]*transaction.Transaction, 0, len(txHashList))
-	ltx := len(txHashList)
-	if uint64(end) > uint64(ltx) {
-		end = int64(ltx)
-	}
-
-	for i := start; i < end; i++ {
-		txBytes, err := bc.getTransactionByHash(txHashList[i])
-		if err != nil {
-			logger.Error("Failed to get transaction", zap.Error(err), zap.ByteString("hash", txHashList[i]))
-			return nil, err
-		}
-
-		transactions = append(transactions, txBytes)
-	}
-
-	return transactions, nil
-}
-
 // GetTransactionByHash get the transaction corresponding to the transaction hash
 func (bc *Blockchain) GetTransactionByHash(hash []byte) (*transaction.Transaction, error) {
 	bc.mu.RLock()
@@ -371,7 +348,7 @@ func (bc *Blockchain) getTransactionByHash(hash []byte) (*transaction.Transactio
 		logger.Error("failed to get hash", zap.Error(err))
 		return nil, err
 	}
-	var txindex TXindex
+	var txindex TxIndex
 	err = json.Unmarshal(Hi, &txindex)
 	if err != nil {
 		logger.Error("Failed to unmarshal bytes", zap.Error(err))
@@ -383,13 +360,13 @@ func (bc *Blockchain) getTransactionByHash(hash []byte) (*transaction.Transactio
 		return nil, err
 	}
 
-	tx := b.Transactions[txindex.Index]
+	tx := &b.Transactions[txindex.Index].Transaction
 
 	return tx, nil
 }
 
 // NewBlock create a new block for the blockchain
-func (bc *Blockchain) NewBlock(txs []*transaction.Transaction, minaddr, Ds, Cm, QTJ types.Address) (*block.Block, error) {
+func (bc *Blockchain) NewBlock(txs []*transaction.SignedTransaction, minaddr address.Address) (*block.Block, error) {
 	logger.Info("start to new block")
 	var height, prevHeight uint64
 	var prevHash []byte
@@ -412,16 +389,14 @@ func (bc *Blockchain) NewBlock(txs []*transaction.Transaction, minaddr, Ds, Cm, 
 	}
 
 	// Currency distribution
-	txs = Distr(txs, minaddr, Ds, Cm, QTJ, height)
+	txs = Distr(txs, minaddr, height)
 
 	// Generate Merkel root, if there is no deal, calling GetMthash will painc
 	txBytesList := make([][]byte, 0, len(txs))
 	for _, tx := range txs {
-		tx.BlockNumber = height
-		txBytesList = append(txBytesList, tx.Serialize())
-
-		gasUsed += tx.GasLimit * tx.GasPrice
-
+		serialize, _ := tx.Serialize()
+		txBytesList = append(txBytesList, serialize)
+		gasUsed += tx.Transaction.GasLimit * tx.Transaction.GasPrice
 	}
 	tree := merkle.New(sha256.New(), txBytesList)
 	root := tree.GetMtHash()
@@ -436,12 +411,12 @@ func (bc *Blockchain) NewBlock(txs []*transaction.Transaction, minaddr, Ds, Cm, 
 		Transactions: txs,
 		Root:         root,
 		Version:      1,
-		Timestamp:    time.Now().Unix(),
+		Timestamp:    uint64(time.Now().Unix()),
 		Miner:        minaddr,
 		SnapRoot:     snapRoot,
 		Difficulty:   difficulty,
 		Nonce:        1,
-		GasLimit:     0,
+		GasLimit:     1,
 		GasUsed:      gasUsed,
 	}
 	block.SetHash()
@@ -483,94 +458,98 @@ func (bc *Blockchain) AddBlock(block *block.Block) error {
 	DBTransaction.Set(HeightKey, miscellaneous.E64func(height))
 
 	for index, tx := range block.Transactions {
-		if tx.IsCoinBaseTransaction() {
-			if err = setTxbyaddrKV(DBTransaction, tx.To.Bytes(), *tx, uint64(index)); err != nil {
-				logger.Error("Failed to set transaction", zap.Error(err), zap.String("from address", tx.From.String()),
-					zap.Uint64("amount", tx.Amount))
+		if tx.Transaction.IsCoinBaseTransaction() {
+			txHash := tx.Hash()
+			if err = setTxbyaddrKV(DBTransaction, tx.Transaction.To.Bytes(), txHash, height, uint64(index)); err != nil {
+				logger.Error("Failed to set transaction", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
+					zap.Uint64("amount", tx.Transaction.Amount))
 				return err
 			}
 
-			gas := tx.GasLimit * tx.GasPrice
+			gas := tx.Transaction.GasLimit * tx.Transaction.GasPrice
 			if err = setMinerFee(bc.sdb, block.Miner.Bytes(), gas); err != nil {
 				logger.Error("Failed to set Minerfee", zap.Error(err), zap.String("from address", block.Miner.String()), zap.Uint64("fee", gas))
 				return err
 			}
 
-			if err := setToAccount(bc.sdb, tx); err != nil {
-				logger.Error("Failed to set account", zap.Error(err), zap.String("from address", tx.From.String()),
-					zap.Uint64("amount", tx.Amount))
+			if err := setToAccount(bc.sdb, &tx.Transaction); err != nil {
+				logger.Error("Failed to set account", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
+					zap.Uint64("amount", tx.Transaction.Amount))
 				return err
 			}
 		} else {
-			if tx.IsFreezeTransaction() || tx.IsUnfreezeTransaction() {
-				if err := setTxbyaddrKV(DBTransaction, tx.From.Bytes(), *tx, uint64(index)); err != nil {
-					logger.Error("Failed to set transaction", zap.Error(err), zap.String("from address", tx.From.String()),
-						zap.String("to address", tx.To.String()), zap.Uint64("amount", tx.Amount))
+			if tx.Transaction.IsLockTransaction() || tx.Transaction.IsUnlockTransaction() {
+				txHash := tx.Hash()
+				if err := setTxbyaddrKV(DBTransaction, tx.Transaction.From.Bytes(), txHash, height, uint64(index)); err != nil {
+					logger.Error("Failed to set transaction", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
+						zap.String("to address", tx.Transaction.To.String()), zap.Uint64("amount", tx.Transaction.Amount))
 					return err
 				}
 
-				if err := setTxbyaddrKV(DBTransaction, tx.To.Bytes(), *tx, uint64(index)); err != nil {
-					logger.Error("Failed to set transaction", zap.Error(err), zap.String("from address", tx.From.String()),
-						zap.String("to address", tx.To.String()), zap.Uint64("amount", tx.Amount))
+				if err := setTxbyaddrKV(DBTransaction, tx.Transaction.To.Bytes(), txHash, height, uint64(index)); err != nil {
+					logger.Error("Failed to set transaction", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
+						zap.String("to address", tx.Transaction.To.String()), zap.Uint64("amount", tx.Transaction.Amount))
 					return err
 				}
 
-				nonce := tx.Nonce + 1
-				if err := setNonce(bc.sdb, tx.From.Bytes(), miscellaneous.E64func(nonce)); err != nil {
-					logger.Error("Failed to set nonce", zap.Error(err), zap.String("from address", tx.From.String()),
-						zap.String("to address", tx.To.String()), zap.Uint64("amount", tx.Amount))
+				nonce := tx.Transaction.Nonce + 1
+				if err := setNonce(bc.sdb, tx.Transaction.From.Bytes(), miscellaneous.E64func(nonce)); err != nil {
+					logger.Error("Failed to set nonce", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
+						zap.String("to address", tx.Transaction.To.String()), zap.Uint64("amount", tx.Transaction.Amount))
 					return err
 				}
 				var frozenBalBytes []byte
-				frozenBal, _ := getFreezeBalance(bc.sdb, tx.To.Bytes())
-				if tx.IsFreezeTransaction() {
-					frozenBalBytes = miscellaneous.E64func(tx.Amount + frozenBal)
+				frozenBal, _ := getFreezeBalance(bc.sdb, tx.Transaction.To.Bytes())
+				if tx.Transaction.IsLockTransaction() {
+					frozenBalBytes = miscellaneous.E64func(tx.Transaction.Amount + frozenBal)
 				} else {
-					frozenBalBytes = miscellaneous.E64func(frozenBal - tx.Amount)
+					frozenBalBytes = miscellaneous.E64func(frozenBal - tx.Transaction.Amount)
 				}
-				if err := setFreezeBalance(bc.sdb, tx.To.Bytes(), frozenBalBytes); err != nil {
-					logger.Error("Faile to freeze balance", zap.String("address", tx.To.String()),
-						zap.Uint64("amount", tx.Amount))
+
+				gas := tx.Transaction.GasLimit * tx.Transaction.GasPrice
+				if err = setMinerFee(bc.sdb, block.Miner.Bytes(), gas); err != nil {
+					logger.Error("Failed to set Minerfee", zap.Error(err), zap.String("from address", block.Miner.String()), zap.Uint64("fee", gas))
 					return err
 				}
-			}
 
-			gas := tx.GasLimit * tx.GasPrice
-			if err = setMinerFee(bc.sdb, block.Miner.Bytes(), gas); err != nil {
-				logger.Error("Failed to set Minerfee", zap.Error(err), zap.String("from address", block.Miner.String()), zap.Uint64("fee", gas))
-				return err
-			}
+				if err := setFreezeBalance(bc.sdb, tx.Transaction.To.Bytes(), frozenBalBytes); err != nil {
+					logger.Error("Faile to freeze balance", zap.String("address", tx.Transaction.To.String()),
+						zap.Uint64("amount", tx.Transaction.Amount))
+					return err
+				}
+			} else {
+				txHash := tx.Hash()
+				if err := setTxbyaddrKV(DBTransaction, tx.Transaction.From.Bytes(), txHash, height, uint64(index)); err != nil {
+					logger.Error("Failed to set transaction", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
+						zap.String("to address", tx.Transaction.To.String()), zap.Uint64("amount", tx.Transaction.Amount))
+					return err
+				}
 
-			if err := setTxbyaddrKV(DBTransaction, tx.From.Bytes(), *tx, uint64(index)); err != nil {
-				logger.Error("Failed to set transaction", zap.Error(err), zap.String("from address", tx.From.String()),
-					zap.String("to address", tx.To.String()), zap.Uint64("amount", tx.Amount))
-				return err
-			}
+				if err := setTxbyaddrKV(DBTransaction, tx.Transaction.To.Bytes(), txHash, height, uint64(index)); err != nil {
+					logger.Error("Failed to set transaction", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
+						zap.String("to address", tx.Transaction.To.String()), zap.Uint64("amount", tx.Transaction.Amount))
+					return err
+				}
+				// update nonce,txs in block must be ordered
+				nonce := tx.Transaction.Nonce + 1
+				if err := setNonce(bc.sdb, tx.Transaction.From.Bytes(), miscellaneous.E64func(nonce)); err != nil {
+					logger.Error("Failed to set nonce", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
+						zap.String("to address", tx.Transaction.To.String()), zap.Uint64("amount", tx.Transaction.Amount))
+					return err
+				}
 
-			if err := setTxbyaddrKV(DBTransaction, tx.To.Bytes(), *tx, uint64(index)); err != nil {
-				logger.Error("Failed to set transaction", zap.Error(err), zap.String("from address", tx.From.String()),
-					zap.String("to address", tx.To.String()), zap.Uint64("amount", tx.Amount))
-				return err
-			}
-			// update nonce,txs in block must be ordered
-			nonce := tx.Nonce + 1
-			if err := setNonce(bc.sdb, tx.From.Bytes(), miscellaneous.E64func(nonce)); err != nil {
-				logger.Error("Failed to set nonce", zap.Error(err), zap.String("from address", tx.From.String()),
-					zap.String("to address", tx.To.String()), zap.Uint64("amount", tx.Amount))
-				return err
-			}
+				gas := tx.Transaction.GasLimit * tx.Transaction.GasPrice
+				if err = setMinerFee(bc.sdb, block.Miner.Bytes(), gas); err != nil {
+					logger.Error("Failed to set Minerfee", zap.Error(err), zap.String("from address", block.Miner.String()), zap.Uint64("fee", gas))
+					return err
+				}
 
-			gas := tx.GasLimit * tx.GasPrice
-			if err = setMinerFee(bc.sdb, block.Miner.Bytes(), gas); err != nil {
-				logger.Error("Failed to set Minerfee", zap.Error(err), zap.String("from address", block.Miner.String()), zap.Uint64("fee", gas))
-				return err
-			}
-
-			// update balance
-			if err := setAccount(bc.sdb, tx); err != nil {
-				logger.Error("Failed to set balance", zap.Error(err), zap.String("from address", tx.From.String()),
-					zap.String("to address", tx.To.String()), zap.Uint64("amount", tx.Amount))
-				return err
+				// update balance
+				if err := setAccount(bc.sdb, tx); err != nil {
+					logger.Error("Failed to set balance", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
+						zap.String("to address", tx.Transaction.To.String()), zap.Uint64("amount", tx.Transaction.Amount))
+					return err
+				}
 			}
 		}
 	}
@@ -584,17 +563,17 @@ func (bc *Blockchain) AddBlock(block *block.Block) error {
 	{
 		logger.Info("end addBlock", zap.Uint64("blockHeight", block.Height))
 
-		chash, err := factCommit(bc.sdb, true)
+		comHash, err := factCommit(bc.sdb, true)
 		if err != nil {
 			logger.Error("Failed to set factCommit", zap.Error(err))
 			return err
 		}
-		if err = DBTransaction.Set(append(SnapRootPrefix, miscellaneous.E64func(height)...), chash.Bytes()); err != nil {
+		if err = DBTransaction.Set(append(SnapRootPrefix, miscellaneous.E64func(height)...), comHash.Bytes()); err != nil {
 			logger.Error("Failed to set height and hash", zap.Error(err))
 			return err
 		}
 		DBTransaction.Del(SnapRootKey)
-		DBTransaction.Set(SnapRootKey, chash.Bytes())
+		DBTransaction.Set(SnapRootKey, comHash.Bytes())
 
 		if err := DBTransaction.Commit(); err != nil {
 			logger.Error("commit ktodb", zap.Error(err), zap.Uint64("block number", block.Height))
@@ -632,40 +611,40 @@ func (bc *Blockchain) DeleteBlock(height uint64) error {
 		}
 
 		for i, tx := range block.Transactions {
-			if tx.IsCoinBaseTransaction() {
-				if err = deleteTxbyaddrKV(DBTransaction, tx.To.Bytes(), *tx, uint64(i)); err != nil {
-					logger.Error("Failed to set transaction", zap.Error(err), zap.String("from address", tx.From.String()),
-						zap.Uint64("amount", tx.Amount))
+			if tx.Transaction.IsCoinBaseTransaction() {
+				if err = deleteTxbyaddrKV(DBTransaction, tx.Transaction.To.Bytes(), *tx, uint64(i)); err != nil {
+					logger.Error("Failed to set transaction", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
+						zap.Uint64("amount", tx.Transaction.Amount))
 					return err
 				}
 
 			} else {
-				if tx.IsFreezeTransaction() || tx.IsUnfreezeTransaction() {
-					if err := deleteTxbyaddrKV(DBTransaction, tx.From.Bytes(), *tx, uint64(i)); err != nil {
-						logger.Error("Failed to del transaction", zap.Error(err), zap.String("from address", tx.From.String()),
-							zap.String("to address", tx.To.String()), zap.Uint64("amount", tx.Amount))
+				if tx.Transaction.IsLockTransaction() || tx.Transaction.IsUnlockTransaction() {
+					if err := deleteTxbyaddrKV(DBTransaction, tx.Transaction.From.Bytes(), *tx, uint64(i)); err != nil {
+						logger.Error("Failed to del transaction", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
+							zap.String("to address", tx.Transaction.To.String()), zap.Uint64("amount", tx.Transaction.Amount))
 						return err
 					}
 
-					if err := deleteTxbyaddrKV(DBTransaction, tx.To.Bytes(), *tx, uint64(i)); err != nil {
-						logger.Error("Failed to del transaction", zap.Error(err), zap.String("from address", tx.From.String()),
-							zap.String("to address", tx.To.String()), zap.Uint64("amount", tx.Amount))
+					if err := deleteTxbyaddrKV(DBTransaction, tx.Transaction.To.Bytes(), *tx, uint64(i)); err != nil {
+						logger.Error("Failed to del transaction", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
+							zap.String("to address", tx.Transaction.To.String()), zap.Uint64("amount", tx.Transaction.Amount))
 						return err
 					}
 				}
 
-				if err := deleteTxbyaddrKV(DBTransaction, tx.From.Bytes(), *tx, uint64(i)); err != nil {
-					logger.Error("Failed to del transaction", zap.Error(err), zap.String("from address", tx.From.String()),
-						zap.String("to address", tx.To.String()), zap.Uint64("amount", tx.Amount))
+				// errUpdate
+				if err := deleteTxbyaddrKV(DBTransaction, tx.Transaction.From.Bytes(), *tx, uint64(i)); err != nil {
+					logger.Error("Failed to del transaction", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
+						zap.String("to address", tx.Transaction.To.String()), zap.Uint64("amount", tx.Transaction.Amount))
 					return err
 				}
 
-				if err := deleteTxbyaddrKV(DBTransaction, tx.To.Bytes(), *tx, uint64(i)); err != nil {
-					logger.Error("Failed to del transaction", zap.Error(err), zap.String("from address", tx.From.String()),
-						zap.String("to address", tx.To.String()), zap.Uint64("amount", tx.Amount))
+				if err := deleteTxbyaddrKV(DBTransaction, tx.Transaction.To.Bytes(), *tx, uint64(i)); err != nil {
+					logger.Error("Failed to del transaction", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
+						zap.String("to address", tx.Transaction.To.String()), zap.Uint64("amount", tx.Transaction.Amount))
 					return err
 				}
-
 			}
 		}
 
@@ -700,51 +679,34 @@ func (bc *Blockchain) DeleteBlock(height uint64) error {
 	return nil
 }
 
-// Distr Currency distribution,execute every time you create a block
-func Distr(txs []*transaction.Transaction, minaddr, Ds, Cm, QTJ types.Address, height uint64) []*transaction.Transaction {
-	// TODO: Avoid magic numbers
-	var orderIndexList []int
-	var total uint64 = 49460000000
-	x := height / 31536000 // miner reward decay period
-
+// Distr coin out test
+func Distr(txs []*transaction.SignedTransaction, minaddr address.Address, height uint64) []*transaction.SignedTransaction {
+	var total uint64 = 170000000000
+	x := height / 3153600
 	for i := 0; uint64(i) < x; i++ {
-		total = total * 8 / 10
-	}
-	each, mod := total/10, total%10
-
-	for i, tx := range txs {
-		if tx.IsOrderTransaction() && tx.Order.Vertify(QTJ) {
-			orderIndexList = append(orderIndexList, i)
-		}
+		total = total * 5 / 10
 	}
 
-	if len(orderIndexList) != 0 {
-		fAmonut, fMod := each/uint64(len(orderIndexList)), each%uint64(len(orderIndexList)) // 10% order user
-		for _, orderIndex := range orderIndexList {
-			txs = append(txs, transaction.NewCoinBaseTransaction(txs[orderIndex].Order.Address, fAmonut))
-		}
-
-		dsAmount := each + fMod // 10% online retailers
-		txs = append(txs, transaction.NewCoinBaseTransaction(Ds, dsAmount))
-	} else {
-		dsAmount := each * 2 // 20% online retailers
-		txs = append(txs, transaction.NewCoinBaseTransaction(Ds, dsAmount))
+	from := new(address.Address)
+	txm := transaction.Transaction{
+		From:   *from,
+		To:     minaddr,
+		Nonce:  0,
+		Amount: total,
+		Type:   transaction.CoinBaseTransaction,
 	}
-
-	jsAmount := each*4 + mod // 40% technology
-	txs = append(txs, transaction.NewCoinBaseTransaction(minaddr, jsAmount))
-
-	sqAmount := each * 4 // 40% community
-	txs = append(txs, transaction.NewCoinBaseTransaction(Cm, sqAmount))
-
+	stxm := transaction.SignedTransaction{
+		Transaction: txm,
+	}
+	txs = append(txs, &stxm)
 	return txs
 }
 
 // setTxbyaddrKV transaction data is stored by address and corresponding kV
-func setTxbyaddrKV(DBTransaction store.Transaction, addr []byte, tx transaction.Transaction, index uint64) error {
-	DBTransaction.Mset(addr, tx.Hash, []byte(""))
-	txindex := &TXindex{
-		Height: tx.BlockNumber,
+func setTxbyaddrKV(DBTransaction store.Transaction, addr []byte, hash []byte, height, index uint64) error {
+	DBTransaction.Mset(addr, hash, []byte(""))
+	txindex := &TxIndex{
+		Height: height,
 		Index:  index,
 	}
 
@@ -753,20 +715,21 @@ func setTxbyaddrKV(DBTransaction store.Transaction, addr []byte, tx transaction.
 		logger.Error("Failed Marshal txindex", zap.Error(err))
 		return err
 	}
-	DBTransaction.Set(tx.Hash, tdex)
+	DBTransaction.Set(hash, tdex)
 
 	return err
 }
 
 // deleteTxbyaddrKV delete transaction data by address and corresponding kV
-func deleteTxbyaddrKV(DBTransaction store.Transaction, addr []byte, tx transaction.Transaction, index uint64) error {
-	err := DBTransaction.Mdel(addr, tx.Hash)
+func deleteTxbyaddrKV(DBTransaction store.Transaction, addr []byte, tx transaction.SignedTransaction, index uint64) error {
+	txHash := tx.Hash()
+	err := DBTransaction.Mdel(addr, txHash)
 	if err != nil {
 		logger.Error("deleteTxbyaddrKV Mdel err ", zap.Error(err))
 		return err
 	}
 
-	if err := DBTransaction.Del(tx.Hash); err != nil {
+	if err := DBTransaction.Del(txHash); err != nil {
 		logger.Error("deleteTxbyaddrKV Del err ", zap.Error(err))
 		return err
 	}

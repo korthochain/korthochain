@@ -18,6 +18,7 @@ const (
 	LockTransaction
 	UnlockTransaction
 	MortgageTransaction
+	CoinBaseTransaction
 )
 
 // Transaction
@@ -298,4 +299,24 @@ func (t *Transaction) UnmarshalCBOR(r io.Reader) error {
 	}
 
 	return nil
+}
+
+// errUpdate
+func (tx *Transaction) IsTransferTrasnaction() bool {
+	return tx.Type == TransferTransaction
+}
+
+// errUpdate
+func (tx *Transaction) IsLockTransaction() bool {
+	return tx.Type == LockTransaction
+}
+
+// errUpdate
+func (tx *Transaction) IsUnlockTransaction() bool {
+	return tx.Type == UnlockTransaction
+}
+
+// errUpdate
+func (tx *Transaction) IsCoinBaseTransaction() bool {
+	return tx.Type == CoinBaseTransaction
 }
