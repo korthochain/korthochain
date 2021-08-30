@@ -114,6 +114,8 @@ type BftConfig struct {
 	LogFileSize      int64    `yaml:"logfilesize"`
 	ChainId          int64    `yaml:"chainid"`
 	GasUsed          uint64   `yaml:"gasused"`
+	GasLimit         uint64   `yaml:"gaslimit"`
+	GasPrice         uint64   `yaml:"gasprice"`
 }
 
 type MonitorConfig struct {

@@ -2,6 +2,7 @@
 package blockchain
 
 import (
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/korthochain/korthochain/pkg/address"
 	"github.com/korthochain/korthochain/pkg/block"
 	"github.com/korthochain/korthochain/pkg/transaction"
@@ -29,6 +30,16 @@ type Blockchains interface {
 	GetMaxBlockHeight() (uint64, error)
 	// GetBlockByHeight get the block corresponding to the block height
 	GetBlockByHeight(uint64) (*block.Block, error)
+	//get binding kto address by eth address
+	GetBindingKtoAddress(ethAddr string) (address.Address, error)
+	//get binding eth address by kto address
+	GetBindingEthAddress(ktoAddr address.Address) (string, error)
+	//call contract
+	CallSmartContract(contractAddr, origin, callInput, value string) (string, error)
+	//get code
+	GetCode(contractAddr string) []byte
+	//get storage by hash
+	GetStorageAt(addr, hash string) common.Hash
 	// GetTransactionByHash get the transaction corresponding to the transaction hash
 	GetTransactionByHash([]byte) (*transaction.SignedTransaction, error)
 }
