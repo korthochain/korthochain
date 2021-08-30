@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/korthochain/korthochain/pkg/util/addrcodec"
 
 	cbg "github.com/whyrusleeping/cbor-gen"
@@ -164,4 +165,12 @@ func (a *Address) UnmarshalCBOR(r io.Reader) error {
 
 	*a = addr
 	return nil
+}
+
+func EthAddressToKtoAddress(ethAddr common.Address) Address {
+	return Address{}
+}
+
+func KtoAddressToEthAddress(Address) common.Address {
+	return common.Address{}
 }

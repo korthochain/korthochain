@@ -11,6 +11,8 @@ type SigType int
 
 const (
 	ED25519 SigType = iota
+	ETH_ED25519
+	ECDSA
 )
 
 const (

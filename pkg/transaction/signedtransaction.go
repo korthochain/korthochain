@@ -3,6 +3,7 @@ package transaction
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 
@@ -115,4 +116,8 @@ func (st *SignedTransaction) String() string {
 
 func (st *SignedTransaction) GetTransaction() Transaction {
 	return st.Transaction
+}
+
+func (st *SignedTransaction) HashToString() string {
+	return hex.EncodeToString(st.Hash())
 }
