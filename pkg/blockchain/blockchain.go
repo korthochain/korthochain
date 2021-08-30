@@ -1,6 +1,7 @@
 package blockchain
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -120,33 +121,52 @@ func setFreezeBalance(s *state.StateDB, addr, freezeBal []byte) error {
 // setAccount set the balance of the corresponding account
 func setAccount(sdb *state.StateDB, tx *transaction.SignedTransaction) error {
 	from, to := tx.Transaction.From.Bytes(), tx.Transaction.To.Bytes()
+	if bytes.Equal(from, to) == true {
+		hash := tx.Hash()
+		gas := tx.Transaction.GasLimit * tx.Transaction.GasPrice
+		fromCA := miscellaneous.BytesSha1Address(from)
+		fromBalBig := sdb.GetBalance(fromCA)
+		fromBalance := fromBalBig.Uint64()
+		if fromBalance < gas {
+			return fmt.Errorf("not sufficient funds,hash:%s,from balance(%d) < gas(%d)",
+				hex.EncodeToString(hash), fromBalance, gas)
+		}
+		if MAXUINT64-fromBalance < gas {
+			return fmt.Errorf("gas is too large,hash:%s,max int64(%d)-balance(%d)<gas(%d) ", hash, MAXUINT64, fromBalance, gas)
+		}
 
-	fromCA := miscellaneous.BytesSha1Address(from)
-	fromBalBig := sdb.GetBalance(fromCA)
-	fromBalance := fromBalBig.Uint64()
+		fromBalance -= gas
+		frombytes := miscellaneous.E64func(fromBalance)
 
-	gas := tx.Transaction.GasLimit * tx.Transaction.GasPrice
-	hash := tx.Hash()
-	if fromBalance < tx.Transaction.Amount+gas {
-		return fmt.Errorf("not sufficient funds,hash:%s,from balance(%d) < amount(%d) + gas(%d)",
-			hex.EncodeToString(hash), fromBalance, tx.Transaction.Amount, gas)
+		setBalance(sdb, from, frombytes)
+		return nil
+	} else {
+		fromCA := miscellaneous.BytesSha1Address(from)
+		fromBalBig := sdb.GetBalance(fromCA)
+		fromBalance := fromBalBig.Uint64()
+
+		gas := tx.Transaction.GasLimit * tx.Transaction.GasPrice
+		hash := tx.Hash()
+		if fromBalance < tx.Transaction.Amount+gas {
+			return fmt.Errorf("not sufficient funds,hash:%s,from balance(%d) < amount(%d) + gas(%d)",
+				hex.EncodeToString(hash), fromBalance, tx.Transaction.Amount, gas)
+		}
+		fromBalance -= tx.Transaction.Amount + gas
+
+		toCA := miscellaneous.BytesSha1Address(to)
+		tobalance := sdb.GetBalance(toCA)
+		toBalance := tobalance.Uint64()
+		if MAXUINT64-toBalance-gas < tx.Transaction.Amount {
+			return fmt.Errorf("amount is too large,hash:%s,max int64(%d)-balance(%d)-gas(%d) < amount(%d)", hash, MAXUINT64, toBalance, gas, tx.Transaction.Amount)
+		}
+		toBalance += tx.Transaction.Amount
+		Frombytes := miscellaneous.E64func(fromBalance)
+		Tobytes := miscellaneous.E64func(toBalance)
+
+		setBalance(sdb, from, Frombytes)
+		setBalance(sdb, to, Tobytes)
+		return nil
 	}
-	fromBalance -= tx.Transaction.Amount + gas
-
-	toCA := miscellaneous.BytesSha1Address(to)
-	tobalance := sdb.GetBalance(toCA)
-	toBalance := tobalance.Uint64()
-	if MAXUINT64-toBalance-gas < tx.Transaction.Amount {
-		return fmt.Errorf("amount is too large,hash:%s,max int64(%d)-balance(%d)-gas(%d) < amount(%d)", hash, MAXUINT64, toBalance, gas, tx.Transaction.Amount)
-	}
-	toBalance += tx.Transaction.Amount
-
-	Frombytes := miscellaneous.E64func(fromBalance)
-	Tobytes := miscellaneous.E64func(toBalance)
-
-	setBalance(sdb, from, Frombytes)
-	setBalance(sdb, to, Tobytes)
-
 	return nil
 }
 
@@ -209,6 +229,38 @@ func (bc *Blockchain) getFreezeBalance(address []byte) (uint64, error) {
 
 	freezeBalBytes := bc.sdb.GetBalance(freezeAddr)
 	return freezeBalBytes.Uint64(), nil
+}
+
+// GetAvailableBalance get available balance of address
+func (bc *Blockchain) GetAvailableBalance(addr []byte) (uint64, error) {
+	balance, err := bc.GetBalance(addr)
+	if err != nil {
+		logger.Error("get balance", zap.Error(err))
+		return 0, err
+	}
+	feeBalance, err := bc.GetFreezeBalance(addr)
+	if err != nil {
+		logger.Error("get lock balance", zap.Error(err))
+		return 0, err
+	}
+	address, err := address.NewFromBytes(addr)
+	if err != nil {
+		logger.Error("NewFromBytes", zap.Error(err))
+		return 0, err
+	}
+	totalMined, err := bc.GetTotalMined(address)
+	if err != nil {
+		logger.Error("get total mined", zap.Error(err))
+		return 0, err
+	}
+	totalPledge, err := bc.GetTotalPledge(address)
+	if err != nil {
+		logger.Error("get total pledge", zap.Error(err))
+		return 0, err
+	}
+
+	aviBalance := balance - feeBalance - totalMined - totalPledge
+	return aviBalance, nil
 }
 
 // getFreezeBalance get the freeze balance of the address
@@ -334,14 +386,14 @@ func (bc *Blockchain) getBlockByheight(height uint64) (*block.Block, error) {
 }
 
 // GetTransactionByHash get the transaction corresponding to the transaction hash
-func (bc *Blockchain) GetTransactionByHash(hash []byte) (*transaction.Transaction, error) {
+func (bc *Blockchain) GetTransactionByHash(hash []byte) (*transaction.SignedTransaction, error) {
 	bc.mu.RLock()
 	defer bc.mu.RUnlock()
 	return bc.getTransactionByHash(hash)
 }
 
 // getTransactionByHash get the transaction corresponding to the transaction hash
-func (bc *Blockchain) getTransactionByHash(hash []byte) (*transaction.Transaction, error) {
+func (bc *Blockchain) getTransactionByHash(hash []byte) (*transaction.SignedTransaction, error) {
 
 	Hi, err := bc.db.Get(hash)
 	if err != nil {
@@ -360,9 +412,9 @@ func (bc *Blockchain) getTransactionByHash(hash []byte) (*transaction.Transactio
 		return nil, err
 	}
 
-	tx := &b.Transactions[txindex.Index].Transaction
+	tx := &b.Transactions[txindex.Index]
 
-	return tx, nil
+	return *tx, nil
 }
 
 // NewBlock create a new block for the blockchain
@@ -389,7 +441,7 @@ func (bc *Blockchain) NewBlock(txs []*transaction.SignedTransaction, minaddr add
 	}
 
 	// Currency distribution
-	txs = Distr(txs, minaddr, height)
+	txs = distr(txs, minaddr, height)
 
 	// Generate Merkel root, if there is no deal, calling GetMthash will painc
 	txBytesList := make([][]byte, 0, len(txs))
@@ -543,7 +595,6 @@ func (bc *Blockchain) AddBlock(block *block.Block) error {
 					logger.Error("Failed to set Minerfee", zap.Error(err), zap.String("from address", block.Miner.String()), zap.Uint64("fee", gas))
 					return err
 				}
-
 				// update balance
 				if err := setAccount(bc.sdb, tx); err != nil {
 					logger.Error("Failed to set balance", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
@@ -631,19 +682,18 @@ func (bc *Blockchain) DeleteBlock(height uint64) error {
 							zap.String("to address", tx.Transaction.To.String()), zap.Uint64("amount", tx.Transaction.Amount))
 						return err
 					}
-				}
+				} else {
+					if err := deleteTxbyaddrKV(DBTransaction, tx.Transaction.From.Bytes(), *tx, uint64(i)); err != nil {
+						logger.Error("Failed to del transaction", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
+							zap.String("to address", tx.Transaction.To.String()), zap.Uint64("amount", tx.Transaction.Amount))
+						return err
+					}
 
-				// errUpdate
-				if err := deleteTxbyaddrKV(DBTransaction, tx.Transaction.From.Bytes(), *tx, uint64(i)); err != nil {
-					logger.Error("Failed to del transaction", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
-						zap.String("to address", tx.Transaction.To.String()), zap.Uint64("amount", tx.Transaction.Amount))
-					return err
-				}
-
-				if err := deleteTxbyaddrKV(DBTransaction, tx.Transaction.To.Bytes(), *tx, uint64(i)); err != nil {
-					logger.Error("Failed to del transaction", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
-						zap.String("to address", tx.Transaction.To.String()), zap.Uint64("amount", tx.Transaction.Amount))
-					return err
+					if err := deleteTxbyaddrKV(DBTransaction, tx.Transaction.To.Bytes(), *tx, uint64(i)); err != nil {
+						logger.Error("Failed to del transaction", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
+							zap.String("to address", tx.Transaction.To.String()), zap.Uint64("amount", tx.Transaction.Amount))
+						return err
+					}
 				}
 			}
 		}
@@ -679,8 +729,8 @@ func (bc *Blockchain) DeleteBlock(height uint64) error {
 	return nil
 }
 
-// Distr coin out test
-func Distr(txs []*transaction.SignedTransaction, minaddr address.Address, height uint64) []*transaction.SignedTransaction {
+// distr coin out test
+func distr(txs []*transaction.SignedTransaction, minaddr address.Address, height uint64) []*transaction.SignedTransaction {
 	var total uint64 = 170000000000
 	x := height / 3153600
 	for i := 0; uint64(i) < x; i++ {
