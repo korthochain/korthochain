@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"korthochain/pkg/contract/evm"
+
 	"github.com/dgraph-io/badger"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/state"
@@ -50,6 +52,7 @@ type Blockchain struct {
 	mu  sync.RWMutex
 	db  store.DB
 	sdb *state.StateDB
+	evm *evm.Evm
 }
 
 // TxIndex transaction data index structure
@@ -75,6 +78,7 @@ func New(db *badger.DB) (*Blockchain, error) {
 	}
 
 	bc := &Blockchain{db: bgs, sdb: stdb}
+	evm.NewEvm(stdb, bc)
 	return bc, nil
 }
 
@@ -144,27 +148,37 @@ func setAccount(sdb *state.StateDB, tx *transaction.SignedTransaction) error {
 	Frombytes := miscellaneous.E64func(fromBalance)
 	Tobytes := miscellaneous.E64func(toBalance)
 
-	setBalance(sdb, from, Frombytes)
-	setBalance(sdb, to, Tobytes)
+	err := setBalance(sdb, from, Frombytes)
+	if err != nil {
+		return err
+	}
+	err = setBalance(sdb, to, Tobytes)
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
 
 // setToAccount set the balance of the specified account
-func setToAccount(sdb *state.StateDB, tx *transaction.Transaction) error {
+func (bc *Blockchain) setToAccount(DBTransaction store.Transaction, block *block.Block, tx *transaction.Transaction) error {
 	to := tx.To.Bytes()
 	toCA := miscellaneous.BytesSha1Address(to)
 
-	toBalanceBig := sdb.GetBalance(toCA)
+	toBalanceBig := bc.sdb.GetBalance(toCA)
 	balance := toBalanceBig.Uint64()
 
 	if MAXUINT64-tx.Amount < balance {
 		return fmt.Errorf("not sufficient funds")
 	}
 	newBalanceBytes := miscellaneous.E64func(balance + tx.Amount)
-	setBalance(sdb, tx.To.Bytes(), newBalanceBytes)
 
-	return nil
+	err := bc.handleMinedPledge(DBTransaction, block, tx.To, tx.Amount)
+	if err != nil {
+		return err
+	}
+
+	return setBalance(bc.sdb, tx.To.Bytes(), newBalanceBytes)
 }
 
 // setMinerFee set the balance of the miner's account
@@ -472,85 +486,152 @@ func (bc *Blockchain) AddBlock(block *block.Block) error {
 				return err
 			}
 
-			if err := setToAccount(bc.sdb, &tx.Transaction); err != nil {
+			if err := bc.setToAccount(DBTransaction, block, &tx.Transaction); err != nil {
 				logger.Error("Failed to set account", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
 					zap.Uint64("amount", tx.Transaction.Amount))
 				return err
 			}
-		} else {
-			if tx.Transaction.IsLockTransaction() || tx.Transaction.IsUnlockTransaction() {
-				txHash := tx.Hash()
-				if err := setTxbyaddrKV(DBTransaction, tx.Transaction.From.Bytes(), txHash, height, uint64(index)); err != nil {
-					logger.Error("Failed to set transaction", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
-						zap.String("to address", tx.Transaction.To.String()), zap.Uint64("amount", tx.Transaction.Amount))
-					return err
-				}
-
-				if err := setTxbyaddrKV(DBTransaction, tx.Transaction.To.Bytes(), txHash, height, uint64(index)); err != nil {
-					logger.Error("Failed to set transaction", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
-						zap.String("to address", tx.Transaction.To.String()), zap.Uint64("amount", tx.Transaction.Amount))
-					return err
-				}
-
-				nonce := tx.Transaction.Nonce + 1
-				if err := setNonce(bc.sdb, tx.Transaction.From.Bytes(), miscellaneous.E64func(nonce)); err != nil {
-					logger.Error("Failed to set nonce", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
-						zap.String("to address", tx.Transaction.To.String()), zap.Uint64("amount", tx.Transaction.Amount))
-					return err
-				}
-				var frozenBalBytes []byte
-				frozenBal, _ := getFreezeBalance(bc.sdb, tx.Transaction.To.Bytes())
-				if tx.Transaction.IsLockTransaction() {
-					frozenBalBytes = miscellaneous.E64func(tx.Transaction.Amount + frozenBal)
-				} else {
-					frozenBalBytes = miscellaneous.E64func(frozenBal - tx.Transaction.Amount)
-				}
-
-				gas := tx.Transaction.GasLimit * tx.Transaction.GasPrice
-				if err = setMinerFee(bc.sdb, block.Miner.Bytes(), gas); err != nil {
-					logger.Error("Failed to set Minerfee", zap.Error(err), zap.String("from address", block.Miner.String()), zap.Uint64("fee", gas))
-					return err
-				}
-
-				if err := setFreezeBalance(bc.sdb, tx.Transaction.To.Bytes(), frozenBalBytes); err != nil {
-					logger.Error("Faile to freeze balance", zap.String("address", tx.Transaction.To.String()),
-						zap.Uint64("amount", tx.Transaction.Amount))
-					return err
-				}
-			} else {
-				txHash := tx.Hash()
-				if err := setTxbyaddrKV(DBTransaction, tx.Transaction.From.Bytes(), txHash, height, uint64(index)); err != nil {
-					logger.Error("Failed to set transaction", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
-						zap.String("to address", tx.Transaction.To.String()), zap.Uint64("amount", tx.Transaction.Amount))
-					return err
-				}
-
-				if err := setTxbyaddrKV(DBTransaction, tx.Transaction.To.Bytes(), txHash, height, uint64(index)); err != nil {
-					logger.Error("Failed to set transaction", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
-						zap.String("to address", tx.Transaction.To.String()), zap.Uint64("amount", tx.Transaction.Amount))
-					return err
-				}
-				// update nonce,txs in block must be ordered
-				nonce := tx.Transaction.Nonce + 1
-				if err := setNonce(bc.sdb, tx.Transaction.From.Bytes(), miscellaneous.E64func(nonce)); err != nil {
-					logger.Error("Failed to set nonce", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
-						zap.String("to address", tx.Transaction.To.String()), zap.Uint64("amount", tx.Transaction.Amount))
-					return err
-				}
-
-				gas := tx.Transaction.GasLimit * tx.Transaction.GasPrice
-				if err = setMinerFee(bc.sdb, block.Miner.Bytes(), gas); err != nil {
-					logger.Error("Failed to set Minerfee", zap.Error(err), zap.String("from address", block.Miner.String()), zap.Uint64("fee", gas))
-					return err
-				}
-
-				// update balance
-				if err := setAccount(bc.sdb, tx); err != nil {
-					logger.Error("Failed to set balance", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
-						zap.String("to address", tx.Transaction.To.String()), zap.Uint64("amount", tx.Transaction.Amount))
-					return err
-				}
+		} else if tx.Transaction.IsLockTransaction() || tx.Transaction.IsUnlockTransaction() {
+			txHash := tx.Hash()
+			if err := setTxbyaddrKV(DBTransaction, tx.Transaction.From.Bytes(), txHash, height, uint64(index)); err != nil {
+				logger.Error("Failed to set transaction", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
+					zap.String("to address", tx.Transaction.To.String()), zap.Uint64("amount", tx.Transaction.Amount))
+				return err
 			}
+
+			if err := setTxbyaddrKV(DBTransaction, tx.Transaction.To.Bytes(), txHash, height, uint64(index)); err != nil {
+				logger.Error("Failed to set transaction", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
+					zap.String("to address", tx.Transaction.To.String()), zap.Uint64("amount", tx.Transaction.Amount))
+				return err
+			}
+
+			nonce := tx.Transaction.Nonce + 1
+			if err := setNonce(bc.sdb, tx.Transaction.From.Bytes(), miscellaneous.E64func(nonce)); err != nil {
+				logger.Error("Failed to set nonce", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
+					zap.String("to address", tx.Transaction.To.String()), zap.Uint64("amount", tx.Transaction.Amount))
+				return err
+			}
+			var frozenBalBytes []byte
+			frozenBal, _ := getFreezeBalance(bc.sdb, tx.Transaction.To.Bytes())
+			if tx.Transaction.IsLockTransaction() {
+				frozenBalBytes = miscellaneous.E64func(tx.Transaction.Amount + frozenBal)
+			} else {
+				frozenBalBytes = miscellaneous.E64func(frozenBal - tx.Transaction.Amount)
+			}
+
+			gas := tx.Transaction.GasLimit * tx.Transaction.GasPrice
+			if err = setMinerFee(bc.sdb, block.Miner.Bytes(), gas); err != nil {
+				logger.Error("Failed to set Minerfee", zap.Error(err), zap.String("from address", block.Miner.String()), zap.Uint64("fee", gas))
+				return err
+			}
+
+			if err := setFreezeBalance(bc.sdb, tx.Transaction.To.Bytes(), frozenBalBytes); err != nil {
+				logger.Error("Faile to freeze balance", zap.String("address", tx.Transaction.To.String()),
+					zap.Uint64("amount", tx.Transaction.Amount))
+				return err
+			}
+		} else if tx.Transaction.IsPledgeTrasnaction() {
+			txHash := tx.Hash()
+			if err := setTxbyaddrKV(DBTransaction, tx.Transaction.From.Bytes(), txHash, height, uint64(index)); err != nil {
+				logger.Error("Failed to set transaction", zap.Error(err), zap.String("hash", transaction.HashToString(txHash)))
+				return err
+			}
+			nonce := tx.Transaction.Nonce + 1
+			if err := setNonce(bc.sdb, tx.Transaction.From.Bytes(), miscellaneous.E64func(nonce)); err != nil {
+				logger.Error("Failed to set nonce", zap.Error(err), zap.String("hash", transaction.HashToString(txHash)))
+				return err
+			}
+
+			err := bc.handlePledgeTransaction(block, DBTransaction, &tx.Transaction)
+			if err != nil {
+				logger.Error("Failed to Pledge", zap.Error(err), zap.String("hash", transaction.HashToString(txHash)))
+				return err
+			}
+
+			gasUsed := tx.Transaction.GasLimit * tx.Transaction.GasPrice
+			if err = setMinerFee(bc.sdb, block.Miner.Bytes(), gasUsed); err != nil {
+				logger.Error("Failed to set Minerfee", zap.Error(err), zap.String("hash", transaction.HashToString(txHash)), zap.Uint64("gasUsed", gasUsed))
+				return err
+			}
+		} else if tx.Transaction.IsEvmContractTransaction() {
+			txHash := tx.Hash()
+			if err := setTxbyaddrKV(DBTransaction, tx.Transaction.From.Bytes(), txHash, height, uint64(index)); err != nil {
+				logger.Error("Failed to set transaction", zap.Error(err), zap.String("hash", transaction.HashToString(txHash)))
+				return err
+			}
+
+			nonce := tx.Transaction.Nonce + 1
+			if err := setNonce(bc.sdb, tx.Transaction.From.Bytes(), miscellaneous.E64func(nonce)); err != nil {
+				logger.Error("Failed to set nonce", zap.Error(err), zap.String("hash", transaction.HashToString(txHash)))
+				return err
+			}
+
+			gasUsed, err := bc.handleContractTransaction(block, DBTransaction, tx, index)
+			if err != nil {
+				logger.Error("Failed to HandleContractTransaction", zap.Error(err), zap.String("hash", transaction.HashToString(txHash)))
+				return err
+			}
+
+			//gasUsed := tx.Transaction.GasLimit * tx.Transaction.GasPrice
+			if err = setMinerFee(bc.sdb, block.Miner.Bytes(), gasUsed); err != nil {
+				logger.Error("Failed to set Minerfee", zap.Error(err), zap.String("hash", transaction.HashToString(txHash)), zap.Uint64("gasUsed", gasUsed))
+				return err
+			}
+		} else {
+			txHash := tx.Hash()
+			if err := setTxbyaddrKV(DBTransaction, tx.Transaction.From.Bytes(), txHash, height, uint64(index)); err != nil {
+				logger.Error("Failed to set transaction", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
+					zap.String("to address", tx.Transaction.To.String()), zap.Uint64("amount", tx.Transaction.Amount))
+				return err
+			}
+
+			if err := setTxbyaddrKV(DBTransaction, tx.Transaction.To.Bytes(), txHash, height, uint64(index)); err != nil {
+				logger.Error("Failed to set transaction", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
+					zap.String("to address", tx.Transaction.To.String()), zap.Uint64("amount", tx.Transaction.Amount))
+				return err
+			}
+			// update nonce,txs in block must be ordered
+			nonce := tx.Transaction.Nonce + 1
+			if err := setNonce(bc.sdb, tx.Transaction.From.Bytes(), miscellaneous.E64func(nonce)); err != nil {
+				logger.Error("Failed to set nonce", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
+					zap.String("to address", tx.Transaction.To.String()), zap.Uint64("amount", tx.Transaction.Amount))
+				return err
+			}
+
+			gas := tx.Transaction.GasLimit * tx.Transaction.GasPrice
+			if err = setMinerFee(bc.sdb, block.Miner.Bytes(), gas); err != nil {
+				logger.Error("Failed to set Minerfee", zap.Error(err), zap.String("from address", block.Miner.String()), zap.Uint64("fee", gas))
+				return err
+			}
+
+			// update balance
+			if err := setAccount(bc.sdb, tx); err != nil {
+				logger.Error("Failed to set balance", zap.Error(err), zap.String("from address", tx.Transaction.From.String()),
+					zap.String("to address", tx.Transaction.To.String()), zap.Uint64("amount", tx.Transaction.Amount))
+				return err
+			}
+		}
+	}
+
+	{
+		//set block into into evm
+		bc.evm.SetBlockInfo(block.Height, block.Miner.String(), uint64(block.Timestamp))
+	}
+
+	{
+		//release 70% Mined
+		err := bc.releaseMined(DBTransaction, block)
+		if err != nil {
+			logger.Error("Failed to Release Mined", zap.Error(err))
+			return err
+		}
+	}
+	{
+		//release pledge
+		err := bc.releasePlege(DBTransaction, block)
+		if err != nil {
+			logger.Error("Failed to Release Plege", zap.Error(err))
+			return err
 		}
 	}
 
@@ -561,8 +642,6 @@ func (bc *Blockchain) AddBlock(block *block.Block) error {
 	}
 
 	{
-		logger.Info("end addBlock", zap.Uint64("blockHeight", block.Height))
-
 		comHash, err := factCommit(bc.sdb, true)
 		if err != nil {
 			logger.Error("Failed to set factCommit", zap.Error(err))
@@ -580,7 +659,7 @@ func (bc *Blockchain) AddBlock(block *block.Block) error {
 			return err
 		}
 	}
-
+	logger.Info("End addBlock", zap.Uint64("blockHeight", block.Height))
 	return nil
 }
 
@@ -674,7 +753,6 @@ func (bc *Blockchain) DeleteBlock(height uint64) error {
 
 		DBTransaction.Cancel()
 	}
-
 	logger.Info("End delete")
 	return nil
 }

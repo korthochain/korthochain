@@ -2,6 +2,7 @@
 package blockchain
 
 import (
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/korthochain/korthochain/pkg/address"
 	"github.com/korthochain/korthochain/pkg/block"
 	"github.com/korthochain/korthochain/pkg/transaction"
@@ -21,4 +22,10 @@ type Blockchains interface {
 	GetHeight() (uint64, error)
 	GetBlockByHeight(uint64) (*block.Block, error)
 	GetTransactionByHash([]byte) (*transaction.Transaction, error)
+
+	GetBindingKtoAddress(ethAddr string) (address.Address, error)
+	GetBindingEthAddress(ktoAddr address.Address) (string, error)
+	CallSmartContract(contractAddr, origin, callInput, value string) (string, error)
+	GetCode(contractAddr string) []byte
+	GetStorageAt(addr, hash string) common.Hash
 }
