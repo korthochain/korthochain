@@ -52,5 +52,5 @@ func (s *ED25519Signer) Sign(priv, msg []byte) ([]byte, error) {
 }
 
 func init() {
-	sigs.RegisterSignature(crypto.ED25519, new(ED25519Signer))
+	sigs.RegisterSignature(crypto.TypeED25519, new(ED25519Signer))
 }

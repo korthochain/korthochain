@@ -1,13 +1,9 @@
 package evm
 
 import (
-	"fmt"
-	"log"
+	"encoding/binary"
 	"math/big"
 	"time"
-
-	"github.com/korthochain/korthochain/pkg/blockchain"
-	"github.com/korthochain/korthochain/pkg/config"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/state"
@@ -15,56 +11,51 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm/runtime"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/korthochain/korthochain/pkg/logger"
 )
 
 // Evm struct
 type Evm struct {
 	cfg *runtime.Config
-	sdb *state.StateDB
-	bc  *blockchain.Blockchain
 }
 
-func NewEvm(sdb *state.StateDB, bc *blockchain.Blockchain) *Evm {
-	e := &Evm{cfg: new(runtime.Config), sdb: sdb, bc: bc}
-	setDefaults(e.cfg)
+func NewEvm(sdb *state.StateDB, chainId int64, gasLimit, gasPrice uint64) *Evm {
+	e := &Evm{cfg: setDefaults(chainId, gasLimit, gasPrice)}
 	e.cfg.State = sdb
+	//GetSnapRoot(sdb, "NewEvm")
 	return e
 }
 
 //Get evm dump
 func (e *Evm) RawDump() state.Dump {
 	if e.cfg.State != nil {
-		//return e.cfg.State.RawDump(false, false, false)
 		return e.cfg.State.RawDump(nil)
 	}
+	//GetSnapRoot(e.cfg.State, "RawDump")
 	return state.Dump{}
 }
 
 //Create a contract
 func (e *Evm) Create(code []byte, origin common.Address) ([]byte, common.Address, uint64, error) {
-	if len(origin) > 0 {
-		e.cfg.Origin = origin
-	}
+	logger.SugarLogger.Infof("evm Create contract origin:%v,gaslimit:%v,value:%v\n", origin, e.cfg.GasLimit, e.cfg.Value)
 	return runtime.Create(code, e.cfg)
 }
 
 //Call contract
 func (e *Evm) Call(contAddr common.Address, origin common.Address, inputCode []byte) ([]byte, uint64, error) {
-	log.Printf("contract address:[%v],inputCode{%v},origin[%v]", contAddr, common.Bytes2Hex(inputCode), origin)
-	getcode := e.cfg.State.GetCode(contAddr)
-	if len(getcode) <= 0 {
-		return nil, 0, fmt.Errorf("Call error:GetCode failed by contractaddress[%v]", contAddr)
-	}
-
+	logger.SugarLogger.Infof("evm Call contract address:[%v],inputCode{%v},origin[%v],gaslimit:%v", contAddr, common.Bytes2Hex(inputCode), origin, e.cfg.GasLimit)
 	e.cfg.State.SetCode(contAddr, e.cfg.State.GetCode(contAddr))
-	e.cfg.Origin = origin
-
 	return runtime.Call(contAddr, inputCode, e.cfg)
 }
 
 //Get contract bytecode
 func (e *Evm) GetCode(contAddr common.Address) []byte {
 	return e.cfg.State.GetCode(contAddr)
+}
+
+func (e *Evm) SetCode(contAddr common.Address, code []byte) {
+	e.cfg.State.SetCode(contAddr, code)
+	return
 }
 
 //Prepare hash into evm
@@ -78,34 +69,31 @@ func (e *Evm) AddLog(lg *types.Log) {
 }
 
 //Get logs
-func (e *Evm) GetLogs(cmhash common.Hash) []*types.Log {
-	return e.cfg.State.GetLogs(cmhash, common.Hash{})
+func (e *Evm) GetLogs(txHash, blockH common.Hash) []*types.Log {
+	log := e.cfg.State.GetLogs(txHash, blockH)
+	return log
 }
 
 //Get logs
 func (e *Evm) Logs() []*types.Log {
-	return e.cfg.State.Logs()
+	log := e.cfg.State.Logs()
+	return log
 }
 
 //SetBlockInfo set block info into evm
-func (e *Evm) SetBlockInfo(num uint64, miner string, tm uint64) {
-	if num >= 0 {
-		e.cfg.BlockNumber = new(big.Int).SetUint64(num)
-	}
-	if len(miner) > 0 {
-		e.cfg.Coinbase = common.HexToAddress(miner)
-	}
-	if tm != 0 {
-		e.cfg.Time = new(big.Int).SetUint64(tm)
-	}
-	//e.cfg.GasLimit = gasLimt
+func (e *Evm) SetBlockInfo(num, tm uint64, miner common.Address, difficulty *big.Int) {
+	e.cfg.BlockNumber = new(big.Int).SetUint64(num)
+	e.cfg.Coinbase = miner
+	e.cfg.Time = new(big.Int).SetUint64(tm)
+	e.cfg.Difficulty = difficulty
 }
 
-//Set value into evm
-func (e *Evm) SetConfig(val, price *big.Int, limit uint64) {
+//Set evm cfg
+func (e *Evm) SetConfig(val, price *big.Int, limit uint64, origin common.Address) {
 	e.cfg.Value = val
 	e.cfg.GasPrice = price
 	e.cfg.GasLimit = limit
+	e.cfg.Origin = origin
 }
 
 //Get evm Config
@@ -130,12 +118,20 @@ func (e *Evm) SetBalance(addr common.Address, amount *big.Int) {
 
 //Get Balance
 func (e *Evm) GetBalance(addr common.Address) *big.Int {
-	return e.cfg.State.GetBalance(addr)
+	bi := e.cfg.State.GetBalance(addr)
+	return bi
+
 }
 
 //Get Nonce
 func (e *Evm) GetNonce(addr common.Address) uint64 {
-	return e.cfg.State.GetNonce(addr)
+	non := e.cfg.State.GetNonce(addr)
+	return non
+}
+
+//Set Nonce
+func (e *Evm) SetNonce(addr common.Address, nonce uint64) {
+	e.cfg.State.SetNonce(addr, nonce)
 }
 
 //Get Storage At address
@@ -146,27 +142,21 @@ func (e *Evm) GetStorageAt(addr common.Address, hash common.Hash) common.Hash {
 
 //Get Snapshot
 func (e *Evm) GetSnapshot() int {
-	return e.cfg.State.Snapshot()
+	i := e.cfg.State.Snapshot()
+	return i
 }
 
 //Revert Snapshot to a position
 func (e *Evm) RevertToSnapshot(sp int) {
 	e.cfg.State.RevertToSnapshot(sp)
-
 }
 
 //sets defaults config
-func setDefaults(cfg *runtime.Config) {
-	var chainId *big.Int
-	if config.GlobalCfg.BFTConfig != nil {
-		chainId = big.NewInt(config.GlobalCfg.BFTConfig.ChainId)
-	} else {
-		chainId = big.NewInt(2559)
-	}
-
+func setDefaults(chainId int64, gasLimit, gasPrice uint64) *runtime.Config {
+	cfg := new(runtime.Config)
 	if cfg.ChainConfig == nil {
 		cfg.ChainConfig = &params.ChainConfig{
-			ChainID:             chainId,
+			ChainID:             big.NewInt(chainId),
 			HomesteadBlock:      new(big.Int),
 			DAOForkBlock:        new(big.Int),
 			DAOForkSupport:      false,
@@ -190,20 +180,10 @@ func setDefaults(cfg *runtime.Config) {
 		cfg.Time = big.NewInt(time.Now().Unix())
 	}
 	if cfg.GasLimit == 0 {
-		//cfg.GasLimit = math.MaxUint64
-		if config.GlobalCfg.BFTConfig != nil {
-			cfg.GasLimit = config.GlobalCfg.BFTConfig.GasLimit
-		} else {
-			cfg.GasLimit = 10000000
-		}
+		cfg.GasLimit = gasLimit
 	}
 	if cfg.GasPrice == nil {
-		if config.GlobalCfg.BFTConfig != nil {
-			cfg.GasPrice = big.NewInt(int64(config.GlobalCfg.BFTConfig.GasPrice))
-		} else {
-			cfg.GasPrice = big.NewInt(21000)
-		}
-
+		cfg.GasPrice = big.NewInt(int64(gasPrice))
 	}
 	if cfg.Value == nil {
 		cfg.Value = new(big.Int)
@@ -216,4 +196,24 @@ func setDefaults(cfg *runtime.Config) {
 			return common.BytesToHash(crypto.Keccak256([]byte(new(big.Int).SetUint64(n).String())))
 		}
 	}
+	return cfg
+}
+
+//parse token name or symbol by call result.
+func ParseCallResultToString(result string) string {
+	var res string
+	resBt := common.Hex2Bytes(result)
+	if len(resBt) > 64 {
+		l := binary.BigEndian.Uint32(resBt[60:64])
+		res = string(resBt[64 : 64+l])
+	}
+	return res
+}
+
+//parse token decimal or totalSupply by call result.
+func ParseCallResultToBig(result string) *big.Int {
+	if res, ok := big.NewInt(0).SetString(result, 16); ok {
+		return res
+	}
+	return nil
 }

@@ -10,7 +10,7 @@ import (
 type messageType = uint8
 
 const (
-	payloadMessageType messageType = iota
+	PayloadMessageType messageType = iota
 	pullPushMessageType
 )
 

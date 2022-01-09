@@ -2,30 +2,35 @@ package address
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
 	"testing"
 
 	"github.com/korthochain/korthochain/pkg/crypto"
 	"github.com/korthochain/korthochain/pkg/crypto/sigs"
 	_ "github.com/korthochain/korthochain/pkg/crypto/sigs/ed25519"
+	_ "github.com/korthochain/korthochain/pkg/crypto/sigs/secp"
 
 	"github.com/stretchr/testify/assert"
 )
 
 func TestED25519Address(t *testing.T) {
-	CurrentNetWork = Mainnet
+	CurrentNetWork = Testnet
 
 	assert := assert.New(t)
-	priv, err := sigs.Generate(crypto.ED25519)
+	priv, err := sigs.Generate(crypto.TypeSecp256k1)
 	assert.NoError(err)
 
-	pub, err := sigs.ToPublic(crypto.ED25519, priv)
+	t.Log("priv:", hex.EncodeToString(priv))
+
+	pub, err := sigs.ToPublic(crypto.TypeSecp256k1, priv)
 	assert.NoError(err)
 
-	addr, err := NewEd25519Addr(pub)
+	addr, err := NewSecp256k1Addr(pub)
 	assert.NoError(err)
+	t.Log("addr:", addr)
 
-	str, err := encode(Mainnet, addr)
+	str, err := encode(CurrentNetWork, addr)
 	assert.NoError(err)
 
 	maybe, err := decode(str)
@@ -117,4 +122,75 @@ func TestTransactionCBOR(t *testing.T) {
 	assert.NoError(err)
 
 	assert.Equal(a, *maybeAddr)
+}
+
+func TestGenesisAddress(t *testing.T) {
+	assert := assert.New(t)
+	priv, err := sigs.Generate(crypto.TypeSecp256k1)
+	assert.NoError(err)
+
+	pub, err := sigs.ToPublic(crypto.TypeSecp256k1, priv)
+	assert.NoError(err)
+
+	addr, err := NewSecp256k1Addr(pub)
+	assert.NoError(err)
+
+	t.Log("addr:", addr.String())
+	t.Log("length:", len(addr.String()))
+	genAddr := "otK00000000000000000000000000000000000000000"
+	addr, err = NewAddrFromString(genAddr)
+	assert.NoError(err)
+
+	t.Log(addr.String())
+
+}
+
+func TestZreoAddress(t *testing.T) {
+	assert := assert.New(t)
+
+	str := ZeroAddress.String()
+
+	maybeZero, err := NewAddrFromString(str)
+	assert.NoError(err)
+
+	assert.Equal(ZeroAddress, maybeZero)
+
+}
+
+func TestCommonAddr(t *testing.T) {
+	str := "otK5XLQHTym83ygtAk6XanyYSioatrnGTm1jYtddAEVNNKp"
+	addr, err := NewAddrFromString(str)
+	if err != nil {
+		t.Error(err)
+	}
+
+	caddr, err := addr.NewCommonAddr()
+	if err != nil {
+		t.Error(err)
+	}
+
+	t.Log(caddr.String())
+}
+
+func TestStringToAddress(t *testing.T) {
+	str1 := "otK5XLQHTym83ygtAk6XanyYSioatrnGTm1jYtddAEVNNKp"
+	addr1, err := StringToAddress(str1)
+	if err != nil {
+		t.Error(err)
+	}
+	fmt.Printf("addr1:%v\n", addr1)
+
+	str2 := "0xF73d8f5BFb7f03b0AF375b1b5cF6581C367890e8"
+	addr2, err := StringToAddress(str2)
+	if err != nil {
+		t.Error(err)
+	}
+	fmt.Printf("addr2:%v\n", addr2)
+
+	str4 := "5XLQHTym83ygtAk6XanyYSioatrnGTm1jYtddAEVNNKp"
+	addr4, err := StringToAddress(str4)
+	if err != nil {
+		t.Error(err)
+	}
+	fmt.Printf("addr4:%v\n", addr4)
 }

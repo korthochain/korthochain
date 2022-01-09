@@ -89,3 +89,41 @@ func TestStHeappush(t *testing.T) {
 		}
 	}
 }
+
+func TestFindTxByHash(t *testing.T) {
+	assert := assert.New(t)
+	q := newQueue()
+
+	addr1, _ := address.NewAddrFromString("otKG7B6mFNNHHLNqLCbFMhz2bbwPJuRv4fMbthXJtcaCAJq")
+	addr2, _ := address.NewAddrFromString("otKFVuKvsDLUb5zWMutcroqs8WiocjgmWuF55WE4GYvfhvA")
+	addr3, _ := address.NewAddrFromString("otK4uXfcTtYYRfFprzxuxzAqqgjx2nTdKUw1WdzybQ2ukn6")
+	srcList := []transaction.SignedTransaction{
+		0:  {Transaction: transaction.Transaction{From: addr1, Nonce: 3, GasFeeCap: 1, GasPrice: 3}},
+		1:  {Transaction: transaction.Transaction{From: addr2, Nonce: 1, GasFeeCap: 1, GasPrice: 8}},
+		2:  {Transaction: transaction.Transaction{From: addr3, Nonce: 2, GasFeeCap: 1, GasPrice: 3}},
+		3:  {Transaction: transaction.Transaction{From: addr1, Nonce: 1, GasFeeCap: 1, GasPrice: 5}},
+		4:  {Transaction: transaction.Transaction{From: addr2, Nonce: 2, GasFeeCap: 1, GasPrice: 6}},
+		5:  {Transaction: transaction.Transaction{From: addr3, Nonce: 1, GasFeeCap: 1, GasPrice: 1}},
+		6:  {Transaction: transaction.Transaction{From: addr1, Nonce: 1, GasFeeCap: 1, GasPrice: 7}},
+		7:  {Transaction: transaction.Transaction{From: addr2, Nonce: 3, GasFeeCap: 1, GasPrice: 4}},
+		8:  {Transaction: transaction.Transaction{From: addr3, Nonce: 3, GasFeeCap: 1, GasPrice: 9}},
+		9:  {Transaction: transaction.Transaction{From: addr3, Nonce: 4, GasFeeCap: 1, GasPrice: 1}},
+		10: {Transaction: transaction.Transaction{From: addr3, Nonce: 1, GasFeeCap: 1, GasPrice: 10}},
+	}
+
+	for _, st := range srcList {
+		q.push(st)
+	}
+
+	hash := srcList[1].HashToString()
+	t.Log("1 hash:", srcList[1].HashToString())
+	addr, nonce, err := q.getAddrAndNonceByHash(hash)
+	assert.NoError(err)
+
+	rst, err := q.getIndex(addr, nonce)
+	assert.NoError(err)
+
+	q.remove(rst.idx)
+	_, _, err = q.getAddrAndNonceByHash(hash)
+	assert.NoError(err)
+}

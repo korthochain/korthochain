@@ -1,0 +1,118 @@
+syntax = "proto3";
+package pb;
+option go_package ="../pb";
+
+message Req_block {
+    bytes hash = 1;
+}
+message Req_blockheight {
+    uint64  height = 1;
+}
+
+message Resp_blockhashs {
+   repeated bytes Hashs=1;
+}
+
+
+
+message Resp_block {
+  uint64 code=1;
+  bytes data=2;
+  string   message=3;
+}
+
+message Req_block_tip{}
+
+message Req_blockchain{
+  uint64 height=1;
+  bytes   hash=2;
+}
+message Resp_blockchain{
+  int32  code=1;
+  repeated bytes Hashs=2;
+  bool issamechain=3;
+  bool isbranchchain=4;
+  bool heigher=5;
+  uint64 height=6;
+
+}
+
+message  BlockHash{
+  bytes  hash=1;
+}
+
+message Req_IP_address{}
+
+message Resp_IP_address{
+  repeated string  address=1; 
+}
+
+message Req_tx{
+  bytes  hash=1;
+}
+message Resp_tx{
+  
+}
+
+message Req_txhash{}
+message Resp_txhash{
+ repeated bytes  txs=1;
+}
+
+message Req_send_blcok{
+  string genesishash=1;
+  bytes block=2;
+}
+
+message Resp_send_block{
+}
+
+message StreamReqData{
+  int64   height =1;
+  bytes   hash = 2;
+  bool    flag = 3;
+}
+
+message StreamResData{
+  int64   height =1;
+  bytes   hash = 2;
+  bool    flag = 3;
+}
+
+message Req_branch{
+  uint64   height =1;
+  bytes   hash = 2;
+}
+message Resp_branch{
+  uint64   height =1;
+  bool    exist=2;
+}
+
+message Req_version{
+}
+
+message Resp_version{
+  string   versioninfo=1;
+}
+
+ 
+// rpc method
+service InsideGreeter {
+    rpc GetBlock (Req_block) returns (Resp_block);  
+    rpc GetBlockHashsByHeight (Req_blockheight) returns (Resp_blockhashs);    
+    rpc GetBlockTip (Req_block_tip) returns (Resp_block);  
+    rpc GetBlockchain(Req_blockchain)returns(Resp_blockchain);
+    rpc GetIPAddress(Req_IP_address)returns(Resp_IP_address);
+    rpc GetTransaction(Req_tx)returns(Resp_tx);
+    rpc GetTransactions(Req_txhash)returns(Resp_txhash);
+    rpc SendBlock(Req_send_blcok)returns(Resp_send_block);
+    rpc SyncBlockchain(Req_blockchain)returns(Resp_blockchain);
+    rpc FindbranchPoint(Req_branch)returns(Resp_branch);
+    rpc VerifyVersion(Req_version)returns(Resp_version);
+ 
+
+
+    rpc AllStream (stream StreamReqData) returns (stream StreamResData){}
+
+
+}

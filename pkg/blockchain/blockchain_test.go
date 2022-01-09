@@ -5,7 +5,6 @@ import (
 
 	"github.com/dgraph-io/badger"
 	"github.com/korthochain/korthochain/pkg/address"
-	"github.com/korthochain/korthochain/pkg/config"
 	"github.com/korthochain/korthochain/pkg/crypto"
 	"github.com/korthochain/korthochain/pkg/crypto/sigs"
 	_ "github.com/korthochain/korthochain/pkg/crypto/sigs/ed25519"
@@ -16,7 +15,7 @@ import (
 
 // init Initialize logger,no exception occurs when the logger package is called
 func init() {
-	logger.InitLogger(config.GlobalCfg.LogConfig)
+	logger.InitLogger(logger.DefaultConfig())
 }
 
 // address and private key of some tests
@@ -37,7 +36,9 @@ func TestNewDB(t *testing.T) {
 		t.Errorf("opendb  error>>>>>>>>>%v", err)
 	}
 	t.Log("start test New()")
-	bc, err := New(db)
+	cfg := &ChainConfig{}
+	// cfg, _ := config.LoadConfig()
+	bc, err := New(db, cfg)
 	if err != nil {
 		t.Errorf("opendb  error>>>>>>>>>%v", err)
 	}
@@ -48,27 +49,18 @@ func TestNewDB(t *testing.T) {
 func TestGetBalance(t *testing.T) {
 	bc := createBlockchain()
 	testAddrA, _ := address.NewAddrFromString(testAddrA)
-	balA, err := bc.GetBalance(testAddrA.Bytes())
+	balA, err := bc.GetBalance(testAddrA)
 	if err != nil {
 		t.Errorf("error>>>>>>>>>%v", err)
 	}
 	t.Logf("testAddrA: %v  balA: %v", testAddrA, balA)
 }
 
-// TestGetFreezeBalance tests whether the given address can correctly obtain the frozen balance
-func TestGetFreezeBalance(t *testing.T) {
-	bc := createBlockchain()
-	balA, err := bc.GetFreezeBalance([]byte(testAddrA))
-	if err != nil {
-		t.Errorf("error>>>>>>>>>%v", err)
-	}
-	t.Logf("testAddrA: %v  FreeBalA: %v", testAddrA, balA)
-}
-
 // TestGetNonce tests whether the nonce of the address can be obtained normally
 func TestGetNonce(t *testing.T) {
 	bc := createBlockchain()
-	nonA, err := bc.GetNonce([]byte(testAddrA))
+	addr, _ := address.NewAddrFromString(testAddrA)
+	nonA, err := bc.GetNonce(addr)
 	if err != nil {
 		t.Errorf("error>>>>>>>>>%v", err)
 	}
@@ -78,7 +70,7 @@ func TestGetNonce(t *testing.T) {
 //TestNewAddBlock tests creates a new block and adds it to the blockchain
 func TestNewAddBlock(t *testing.T) {
 	bc := createBlockchain()
-	//	address.CurrentNetWork = Mainnet
+	
 
 	var txs []*transaction.SignedTransaction
 	from, err := address.NewAddrFromString(testAddrA)
@@ -87,10 +79,9 @@ func TestNewAddBlock(t *testing.T) {
 	}
 	to, _ := address.NewAddrFromString(testAddrB)
 	minaddr, _ := address.NewAddrFromString(testAddrC)
-	nonce, _ := bc.getNonce(from.Bytes())
+	nonce, _ := bc.getNonce(from)
 
-	//	balance := miscellaneous.E64func(100000000)
-	//	_ = setBalance(bc.sdb, from.Bytes(), balance)
+
 
 	tmp := &transaction.Transaction{
 		Version:  1,
@@ -103,7 +94,7 @@ func TestNewAddBlock(t *testing.T) {
 		GasPrice: 10,
 	}
 	priv, _ := base58.Decode(testPrivA)
-	siganature, err := sigs.Sign(crypto.ED25519, priv, tmp.SignHash())
+	siganature, err := sigs.Sign(crypto.TypeED25519, priv, tmp.SignHash())
 	if err != nil {
 		t.Errorf("error>>>>>>>>>%v", err)
 	}
@@ -125,6 +116,8 @@ func TestNewAddBlock(t *testing.T) {
 		t.Errorf("error>>>>>>>>>%v", err)
 	}
 	t.Logf(">>>>>>>>>newblock %v", block)
+
+	// data,err := block.Serialize()
 
 	err = bc.AddBlock(block)
 	if err != nil {
@@ -189,15 +182,6 @@ func TestGetTransactionByHash(t *testing.T) {
 }
 
 // TestGetHeight tests whether the current block height can be obtained normally
-func TestGetHeight(t *testing.T) {
-	bc := createBlockchain()
-	h, err := bc.GetHeight()
-	if err != nil {
-		t.Errorf("error>>>>>>>>>%v", err)
-	}
-	t.Logf("height: %v ", h)
-}
-
 // TestGetSnapRoot tests whether the current snapshot can be obtained normally
 func TestGetSnapRoot(t *testing.T) {
 	bc := createBlockchain()
@@ -212,6 +196,7 @@ func TestGetSnapRoot(t *testing.T) {
 func createBlockchain() *Blockchain {
 	opts := badger.DefaultOptions("dbtest.db")
 	db, _ := badger.Open(opts)
-	bc, _ := New(db)
+	cfg := &ChainConfig{}
+	bc, _ := New(db, cfg)
 	return bc
 }

@@ -2,12 +2,11 @@
 package logger
 
 import (
-	"github.com/korthochain/korthochain/pkg/config"
+	"log"
+
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"gopkg.in/natefinch/lumberjack.v2"
-	"log"
-	"os"
 )
 
 // Logger log writer
@@ -17,7 +16,7 @@ var Logger *zap.Logger
 var SugarLogger *zap.SugaredLogger
 
 // InitLogger Initialize logger
-func InitLogger(cfg *config.LogConfigInfo) (err error) {
+func InitLogger(cfg *Config) (err error) {
 	encoder := getEncoder()
 	syncWriter := getLogWriter(cfg.FileName, cfg.MaxAge, cfg.MaxSize, cfg.MaxBackups, cfg.Comperss)
 
@@ -52,7 +51,8 @@ func getLogWriter(filename string, maxAge, maxSize, maxBackups int, compress boo
 		MaxBackups: maxBackups,
 		Compress:   compress,
 	}
-	return zapcore.NewMultiWriteSyncer(zapcore.AddSync(umberJackLogger), zapcore.AddSync(os.Stdout))
+	//return zapcore.NewMultiWriteSyncer(zapcore.AddSync(umberJackLogger), zapcore.AddSync(os.Stdout))
+	return zapcore.NewMultiWriteSyncer(zapcore.AddSync(umberJackLogger))
 }
 
 // Debug logs a message at DebugLevel. The message includes any fields passed

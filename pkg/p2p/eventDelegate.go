@@ -9,13 +9,13 @@ type eventDelegate struct {
 }
 
 func (ed *eventDelegate) NotifyJoin(node *memberlist.Node) {
-	ed.node.logger.Printf("A node has joined: %s", node.String())
+	ed.node.logger.Printf("A node has joined: %s, ip:%s", node.String(), node.Address())
 }
 
 func (ed *eventDelegate) NotifyLeave(node *memberlist.Node) {
-	ed.node.logger.Printf("A node has left: %s", node.String())
+	ed.node.logger.Printf("A node has left: %s, ip:%s", node.String(), node.Address())
 }
 
 func (ed *eventDelegate) NotifyUpdate(node *memberlist.Node) {
-	ed.node.logger.Printf("A node was updated: %s", node.String())
+	ed.node.logger.Printf("A node was updated: %s, ip:%s", node.String(), node.Address())
 }

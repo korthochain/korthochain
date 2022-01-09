@@ -1,27 +1,38 @@
 package consensus
 
 import (
-	/* 	"korthochain/pkg/block" */
+	"sync"
 	"time"
 
 	"github.com/korthochain/korthochain/pkg/block"
+	"github.com/korthochain/korthochain/pkg/blockchain"
 )
 
 type Hash [HashSize]byte
 
-const HashSize int = 64
+const HashSize int = 32
 
 // Blockchain synchronization state management, including adding and
 // removing blocks. The longest blockchain selection, as well as update
 
 type BlockChain struct {
 	BlockHeader *block.Block
+	Bc          blockchain.Blockchains
 	//blockchain  db
 	//accounts db
 
 	Oranphs      map[Hash]*OrphanBlock
 	PrevOrphans  map[Hash][]*OrphanBlock
 	oldestOrphan *OrphanBlock
+	orphanLock   sync.RWMutex
+}
+
+func New(bc *blockchain.Blockchain) *BlockChain {
+	return &BlockChain{
+		Bc:          bc,
+		Oranphs:     make(map[Hash]*OrphanBlock),
+		PrevOrphans: make(map[Hash][]*OrphanBlock),
+	}
 }
 
 //orphan Block data structure
@@ -30,14 +41,16 @@ type OrphanBlock struct {
 	Expiration time.Time
 }
 
-func (hash *Hash) IsEqual(target *Hash) bool {
-	if hash == nil && target == nil {
-		return true
+func (b *BlockChain) OrphanBlockIsExist(hash []byte) (*block.Block, bool) {
+	b.orphanLock.Lock()
+	defer b.orphanLock.Unlock()
+	h := BytesToHash(hash)
+	oranph, ok := b.Oranphs[h]
+	if ok {
+		return oranph.Block, ok
 	}
-	if hash == nil || target == nil {
-		return false
-	}
-	return *hash == *target
+
+	return nil, false
 }
 
 func BytesToHash(in []byte) Hash {

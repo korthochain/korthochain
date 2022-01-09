@@ -22,7 +22,7 @@ func (d *delegate) NotifyMsg(buf []byte) {
 	msgType := messageType(buf[0])
 	var rebroadcast = false
 	switch msgType {
-	case payloadMessageType:
+	case PayloadMessageType:
 		msg := &message{}
 		decodeMessage(buf[1:], msg)
 		rebroadcast = d.node.handleMessage(msg)

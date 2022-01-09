@@ -1,0 +1,27 @@
+chaincfg:
+  chainid: 2559
+  gaslimit: 21000
+  gasprice: 100
+logconfig:
+  level: ERROR
+metamaskcfg:
+  chainid: "0x9ff"
+  clinetversion: Mist/v0.9.3/darwin/go1.16
+  listenport: 0.0.0.0:12559
+  networkid: "0x9ff"
+minerconfig:
+  difficultybits: "0x20002000"
+  genesishash: 
+  miningaddr: 
+  nomining: false
+networktype: mainnet
+p2pconfig:
+  advertiseaddr: 127.0.0.1
+  jionmembers: 127.0.0.1
+  port: 10002
+sververcfg:
+  chainserverport: 0.0.0.0:13889  
+  grpcaddress: 0.0.0.0:13869
+  insiderpcaddress: 0.0.0.0:10001
+  webaddress: 0.0.0.0:13879
+  greamhost: 

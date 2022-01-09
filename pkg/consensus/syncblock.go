@@ -3,48 +3,75 @@ package consensus
 
 import (
 	"encoding/hex"
+	"math/big"
 	"time"
 
 	"github.com/korthochain/korthochain/pkg/block"
+	"github.com/korthochain/korthochain/pkg/blockchain"
+	"github.com/korthochain/korthochain/pkg/logger"
+	"go.uber.org/zap"
 )
-
-//hash存在则丢弃块，
-//prevhash 不存在，加入孤块列表
-//prevhash 存在，则将块加入chain，判断加入当前块是否时最长链
-//块加入后，hash在孤块列表,则延长当前链，筛选孤块列表中过期的块
-
-//QUESTION
-// 1.如何判断最长链的
-// 2.孤块中超过了当前的最大块高，如何保证跟其他节点保持一致，
-// 3.使用orphans中的块延长链时，如何确认最长链
 
 const (
-	maxEqealBlockHeight = 6
-	maxExpiration       = time.Hour
-	maxOrphanBlocks     = 100
+	MaxEqealBlockWeight = 10
+	MaxExpiration       = time.Hour
+	MaxOrphanBlocks     = 200
 )
 
-func (b *BlockChain) ProcessBlock(newblock block.Block) bool {
+// ProcessBlock is the main workhorse for handling insertion of new blocks into
+// the block chain.  It includes functionality such as rejecting duplicate
+// blocks, ensuring blocks follow all rules, orphan handling, and insertion into
+// the block chain along with best chain selection and reorganization.
+//
+// When no errors occurred during processing, the first return value indicates
+// whether or not the block is on the main chain and the second indicates
+// whether or not the block is an orphan.
+func (b *BlockChain) ProcessBlock(newblock *block.Block, globalDifficulty *big.Int, basePledge uint64) bool {
 
 	//newblcok hash is exist
+	defer logger.Info(" ProcessBlock  end ", zap.Uint64("height", newblock.Height), zap.String("hash", hex.EncodeToString(newblock.Hash)))
 
-	if BlockExists(hex.EncodeToString(newblock.Hash)) {
+	if b.BlockExists(newblock.Hash) {
+		logger.SugarLogger.Info("Block is exist", hex.EncodeToString(newblock.Hash))
 		return false
 	}
 
-	//检查块数据健全性
-	/* 	checkBlockRegular() */
+	hash := BytesToHash(newblock.Hash)
+	if _, exist := b.Oranphs[hash]; exist {
+		logger.Info("orphan is exist", zap.String("hash", hex.EncodeToString(newblock.Hash)))
+		return false
+	}
 
-	//判断prevhash是否存在，
-	if !BlockExists(hex.EncodeToString(newblock.PrevHash)) {
-		//
+	maxHeight, err := b.Bc.GetMaxBlockHeight()
+	if err != nil {
+		logger.SugarLogger.Error("GetBlockByHeight err", err)
+		return false
+	}
+	if maxHeight == blockchain.InitHeight {
+		logger.SugarLogger.Error("==========first blcok============", hex.EncodeToString(newblock.Hash))
+		err = b.Bc.AddBlock(newblock)
+		if err != nil {
+			logger.SugarLogger.Error("first blcok addblock err", err)
+			return false
+		}
+		return true
+	}
+
+	if !b.BlockExists(newblock.PrevHash) {
+		logger.Info("prevhash not exist")
 		b.AddOrphanBlock(newblock)
 		return false
 	}
 
 	//maybeAcceptBlock return longest chain flag
-	mainChain := maybeAcceptBlock(newblock)
+	succ, mainChain := b.maybeAcceptBlock(newblock)
+	if !succ {
+		return false
+	}
+	ok := b.ProcessOrphan(newblock)
+	if ok {
+		mainChain = ok
+	}
 
-	b.ProcessOrphan(newblock)
 	return mainChain
 }

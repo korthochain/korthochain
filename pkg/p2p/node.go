@@ -2,18 +2,18 @@ package p2p
 
 import (
 	"bytes"
-	"encoding/hex"
 	"fmt"
 	"log"
 	"net"
 	"os"
 	"sync"
 
+	"github.com/gofrs/uuid"
 	"github.com/hashicorp/memberlist"
 )
 
 type Node struct {
-	config *Config
+	Config *Config
 
 	memberlist *memberlist.Memberlist
 
@@ -61,7 +61,9 @@ func Create(conf Config) (*Node, error) {
 	if conf.HandleFunc == nil {
 		return nil, fmt.Errorf("HandleFunc cannot be empty")
 	}
-	node := &Node{}
+	node := &Node{
+		Config: &conf,
+	}
 
 	logDest := conf.LogOutput
 	if logDest == nil {
@@ -88,7 +90,13 @@ func Create(conf Config) (*Node, error) {
 	conf.MemberlistConfig.Events = &eventDelegate{node: node}
 
 	conf.MemberlistConfig.Logger = conf.Logger
-	conf.MemberlistConfig.Name = conf.NodeName
+	conf.MemberlistConfig.HandoffQueueDepth = 1024 * 10
+
+	name, err := uuid.NewV4()
+	if err != nil {
+		return nil, err
+	}
+	conf.MemberlistConfig.Name = name.String()
 
 	memberlist, err := memberlist.Create(conf.MemberlistConfig)
 	if err != nil {
@@ -96,12 +104,13 @@ func Create(conf Config) (*Node, error) {
 	}
 
 	node.memberlist = memberlist
+
 	return node, nil
 }
 
-// func (n *Node) RegisterHandleFunc(f func([]byte) error) {
-// 	n.HandleFunc = f
-// }
+func (n *Node) RegisterHandleFunc(f func([]byte) error) {
+	n.HandleFunc = f
+}
 
 func (n *Node) handleMessage(msg *message) bool {
 	msgc := *msg
@@ -110,8 +119,6 @@ func (n *Node) handleMessage(msg *message) bool {
 	// Check if this message is too old
 	currTime := n.messageClock.Time()
 	if currTime > LamportTime(len(n.messageBuffer)) && msgc.LTime < currTime-LamportTime(len(n.messageBuffer)) {
-		n.logger.Printf("node received old message from message:%s,message ltime:%d (cuttent ltime:%d)",
-			hex.EncodeToString(msgc.id()), msgc.LTime, currTime)
 		return false
 	}
 
@@ -135,9 +142,7 @@ func (n *Node) handleMessage(msg *message) bool {
 	n.messageBufferMutex.Unlock()
 
 	if n.HandleFunc != nil {
-		if err := n.HandleFunc(msgc.Payload); err != nil {
-			return false
-		}
+		go n.HandleFunc(msgc.Payload)
 	}
 
 	return true
@@ -182,7 +187,7 @@ func (n *Node) Leave() error {
 	}
 	n.stateLock.Unlock()
 
-	if err := n.memberlist.Leave(n.config.BroadcastTimeout); err != nil {
+	if err := n.memberlist.Leave(n.Config.BroadcastTimeout); err != nil {
 		return err
 	}
 

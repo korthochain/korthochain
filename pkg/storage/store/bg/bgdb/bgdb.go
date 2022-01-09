@@ -1,7 +1,6 @@
 package bgdb
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -123,9 +122,7 @@ func (b *batch) Put(key, value []byte) error {
 // Delete inserts the a key removal into the batch for later committing.
 func (b *batch) Delete(key []byte) error {
 	b.writes = append(b.writes, keyvalue{key, nil, true})
-	{
-		fmt.Printf("delete %v\n", key)
-	}
+
 	b.size++
 	return nil
 }
@@ -201,7 +198,6 @@ func (db *Database) Stat(property string) (string, error) {
 }
 
 func (db *Database) Compact(start []byte, limit []byte) error {
-	fmt.Printf("Compact: start [%v]>>>>>>>>>limit[%v]>>>>>>>>\n", start, limit)
 	return nil
 }
 
@@ -231,4 +227,8 @@ func (db *Database) TruncateAncients(n uint64) error {
 
 func (db *Database) Sync() error {
 	return db.DB.Sync()
+}
+
+func (db *Database) ReadAncients(kind string, start, count, maxBytes uint64) ([][]byte, error) {
+	return nil, errNotSupported
 }

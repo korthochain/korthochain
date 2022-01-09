@@ -1,8 +1,10 @@
 package p2p
 
 import (
+	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"time"
 
@@ -43,11 +45,25 @@ type Config struct {
 	Logger *log.Logger
 }
 
-// DefaultConfig provides a default p2p node configuration 
+// DefaultConfig provides a default p2p node configuration
 func DefaultConfig() Config {
 	hostname, err := os.Hostname()
 	if err != nil {
 		panic(err)
+	}
+
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	for _, address := range addrs {
+		//Check the IP address to determine whether to return the loopback address
+		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ipnet.IP.To4() != nil {
+				hostname = ipnet.IP.String()
+			}
+		}
 	}
 
 	config := Config{

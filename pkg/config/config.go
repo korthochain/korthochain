@@ -1,141 +1,48 @@
 package config
 
 import (
-	"fmt"
-
+	"github.com/korthochain/korthochain/pkg/blockchain"
+	_ "github.com/korthochain/korthochain/pkg/crypto/sigs/secp"
+	"github.com/korthochain/korthochain/pkg/miner"
 	"github.com/spf13/viper"
 )
 
 type CfgInfo struct {
-	LogConfig *LogConfigInfo `yaml:"logconfig"`
-	//AddressConfig *AddressConfigInfo `yaml:"addressconfig"`
-	P2PConfigList []*P2PConfigInfo `yaml:"p2pconfig"`
-	//P2PTxConfig     *P2PTxConfigInfo     `yaml:"p2pTxconfig"`
-	//ConsensusConfig *ConsensusConfigInfo `yaml:"consensusconfig"`
-	APIConfig        *APIConfigInfo    `yaml:"apiconfig"`
-	BFTConfig        *BftConfig        `yaml:"bftconfig"`
-	MonitorCfg       *MonitorConfig    `yaml:"monitorconfig"`
-	BlockchainConfig *BlockchainConfig `yaml:"blockchainconfig`
+	ChainCfg    *blockchain.ChainConfig `yaml:"chainCfg"`
+	SververCfg  *ServerConfig           `yaml:"sververCfg"`
+	MetamaskCfg *MetamaskConfig         `yaml:"metamaskCfg"`
+	P2PConfig   *P2PConfig              `yaml:"p2pconfig"`
+	MinerConfig *miner.Config           `yaml:"minerconfig"`
+	NetWorkType string                  `yaml:"networktype"`
 }
 
-type LogConfigInfo struct {
-	Level      string `yaml:"level"`
-	FileName   string `yaml:"filename"`
-	MaxSize    int    `yaml:"maxsize"`
-	MaxAge     int    `yaml:"maxage"`
-	MaxBackups int    `yaml:"maxbackups"`
-	Comperss   bool   `yaml:"comperss"`
+type ServerConfig struct {
+	GRpcAddress      string `yaml:"grpcaddress"`
+	WebAddress       string `yaml:"webaddress"`
+	InsiderpcAddress string `yaml:"insiderpcaddress"`
+	GreamHost        string `yaml:"greamhost"`
+	ChainServerPort  string `yaml:"chainserverport"`
 }
 
-type RPCConfigInfo struct {
-	Address   string `yaml:"address"`
-	CertFile  string `yaml:"certfile"`
-	KeyFile   string `yaml:"keyfile"`
-	AdminAddr string `yaml:"adminaddr"`
+type MetamaskConfig struct {
+	ChainId       string `yaml:"chainid"`
+	NetworkId     string `yaml:"networkId"`
+	ClinetVersion string `yaml:"clinetVersion"`
+	ListenPort    string `yaml:"listenPort"`
 }
 
-type WEBConfigInfo struct {
-	Address string `yaml:"address"`
-}
-
-type APIConfigInfo struct {
-	Port      string         `yaml:"port"`
-	RPCConfig *RPCConfigInfo `yaml:"rpcconfig"`
-	WEBConfig *WEBConfigInfo `yaml:"webconfig"`
-}
-
-type P2PConfigInfo struct {
-	BindPort      int      `yaml:"bindport"`
-	BindAddr      string   `yaml:"bindaddr"`
+type P2PConfig struct {
 	AdvertiseAddr string   `yaml:"advertiseaddr"`
-	NodeName      string   `yaml:"nodename"`
-	Members       []string `yaml:"members"`
-}
-
-type P2PTxConfigInfo struct {
-	BindPort      int      `yaml:"bindport"`
-	BindAddr      string   `yaml:"bindaddr"`
-	AdvertiseAddr string   `yaml:"advertiseaddr"`
-	NodeName      string   `yaml:"nodename"`
-	Members       []string `yaml:"members"`
-}
-
-type AddressConfigInfo struct {
-	QTJAddress   string `yaml:"qtjaddress"`
-	DSAddress    string `yaml:"dsaddress"`
-	CMAddress    string `yaml:"cmaddress"`
-	MinerAddress string `yaml:"mineraddress"`
-}
-
-type ConsensusConfigInfo struct {
-	Id        int      `yaml:"id"`
-	Address   string   `yaml:"address"`
-	Peer      string   `yaml:"peer"`
-	Peers     []string `yaml:"peers"`
-	Join      bool     `yaml:"join"`
-	Waldir    string   `yaml:"waldir"`
-	Snapdir   string   `yaml:"snapdir"`
-	Raftport  int64    `yaml:"raftport"`
-	Ds        string   `yaml:"ds"`
-	Cm        string   `yaml:"cm"`
-	QTJ       string   `yaml:"qtj"`
-	SnapCount int64    `yaml:"snapcount"`
-
-	LogFile     string `yaml:"logfile"`
-	LogSaveDays int    `yaml:"logsavedays"`
-	LogLevel    int    `yaml:"loglevel"`
-	LogSaveMode int    `yaml:"logsavemode"`
-	LogFileSize int64  `yaml:"logfilesize"`
-}
-
-type BftConfig struct {
-	NodeNum          uint64   `yaml:"nodenum"`
-	Peers            []string `yaml:"peers"`
-	HttpAddr         string   `yaml:"httpaddr"`
-	NodeAddr         string   `yaml:"nodeaddr"`
-	CountAddr        string   `yaml:"countaddr"`
-	MRpcAddr         string   `yaml:"mrpcaddr"`
-	RpcPort          string   `yaml:"rpcport"`
-	Join             bool     `yaml:"join"`
-	Restart          bool     `yaml:"restart"`
-	SnapshotCount    uint64   `yaml:"snapshotcount"`
-	SnapshotInterval uint64   `yaml:"snapshotinterval"`
-	Ds               string   `yaml:"ds"`
-	Cm               string   `yaml:"cm"`
-	QTJ              string   `yaml:"qtj"`
-	LogDir           string   `yaml:"logdir"`
-	SnapDir          string   `yaml:"snapdir"`
-	LogsDir          string   `yaml:"logsdir"`
-	StableDir        string   `yaml:"stabledir"`
-	LogFile          string   `yaml:"logfile"`
-	LogSaveDays      int      `yaml:"logsavedays"`
-	LogLevel         int      `yaml:"loglevel"`
-	LogSaveMode      int      `yaml:"logsavemode"`
-	LogFileSize      int64    `yaml:"logfilesize"`
-	ChainId          int64    `yaml:"chainid"`
-	GasUsed          uint64   `yaml:"gasused"`
-	GasLimit         uint64   `yaml:"gaslimit"`
-	GasPrice         uint64   `yaml:"gasprice"`
-}
-
-type MonitorConfig struct {
-	StartBlockHeight uint64   `yaml:"startBlockHeight"`
-	MPeer            string   `yaml:"mpeer"`
-	MPeers           []string `yaml:"mpeers"`
-	GrpcPort         string   `yaml:"grpcport"`
-	RpcPort          string   `yaml:"rpcport"`
-	RaftPort         string   `yaml:"raftport"`
-	AccountAddr      string   `yaml:"accountAddr"`
-}
-
-type BlockchainConfig struct {
-	DexFeeAddr string `yaml:"dexfeeaddr"`
+	Port          int      `yaml:"port"`
+	JionMembers   []string `yaml:"jionmembers"`
 }
 
 // LoadConfig load configuration information
 func LoadConfig() (*CfgInfo, error) {
+	viper := viper.New()
 	viper.SetConfigName("korthoConf")
-	viper.AddConfigPath("./configs/")
+	viper.SetConfigType("yaml")
+	viper.AddConfigPath("./config/")
 	if err := viper.ReadInConfig(); err != nil {
 		return nil, err
 	}
@@ -144,21 +51,6 @@ func LoadConfig() (*CfgInfo, error) {
 	if err := viper.Unmarshal(&cfg); err != nil {
 		return nil, err
 	}
-	fmt.Printf("config info: %+v\n", cfg)
 
 	return &cfg, nil
-}
-
-var GlobalCfg *CfgInfo
-
-func init() {
-	viper.SetConfigName("korthoConf")
-	viper.AddConfigPath("./configs/")
-	if err := viper.ReadInConfig(); err != nil {
-		panic(fmt.Errorf("fatal error config file:%s", err))
-	}
-
-	if err := viper.Unmarshal(&GlobalCfg); err != nil {
-		panic(fmt.Errorf("fatal error config file:%s", err))
-	}
 }

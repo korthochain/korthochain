@@ -6,13 +6,16 @@ import (
 	"time"
 
 	"github.com/korthochain/korthochain/pkg/address"
+	"github.com/korthochain/korthochain/pkg/blockchain"
+	_ "github.com/korthochain/korthochain/pkg/crypto/sigs/ed25519"
+	_ "github.com/korthochain/korthochain/pkg/crypto/sigs/secp"
 	"github.com/korthochain/korthochain/pkg/transaction"
 	"github.com/korthochain/korthochain/pkg/util/math"
 	"go.uber.org/zap"
 )
 
 const (
-	pendingLimit = 100
+	PendingLimit = 100
 	poolCap      = 10000
 	timesub      = 100
 )
@@ -27,21 +30,22 @@ const (
 // }
 
 type IBlockchain interface {
-	GetNonce(address.Address) uint64
-	GetLockBalance(address.Address) uint64
-	GetAvalibleBalance(address.Address) uint64
+	GetNonce(address.Address) (uint64, error)
+	GetAvailableBalance(address.Address) (uint64, error)
+	GetAllFreezeBalance(address address.Address) (uint64, error)
+	GetSingleFreezeBalance(address.Address, address.Address) (uint64, error)
 }
 
 // Pool is a temporary storage pool for unchained transactions.
 // Transactions are sorted by GasCap and Nonce in the pool and waiting to be
 // uploaded to the chain.
 type Pool struct {
-	qlock      sync.Mutex
-	q          *orderlyQueue
-	pendingBuf []transaction.SignedTransaction
-	bc         IBlockchain
+	qlock sync.Mutex
+	q     *orderlyQueue
 
-	logger *zap.Logger
+	bc         IBlockchain
+	logger     *zap.Logger
+	pendingBuf []transaction.SignedTransaction
 }
 
 // NewPool Create transaction pool
@@ -53,7 +57,7 @@ func NewPool(cfg Config) (*Pool, error) {
 	p := &Pool{
 		bc:         cfg.BlockChain,
 		q:          newQueue(),
-		pendingBuf: make([]transaction.SignedTransaction, pendingLimit),
+		pendingBuf: make([]transaction.SignedTransaction, PendingLimit, PendingLimit),
 	}
 
 	if cfg.Logger != nil {
@@ -68,15 +72,54 @@ func NewPool(cfg Config) (*Pool, error) {
 // Add to add a new transaction to the pool, outdated transactions
 // will return an error
 func (p *Pool) Add(st *transaction.SignedTransaction) error {
+	if st.Type == transaction.TransferTransaction {
+		if len(st.Input) > 0 {
+			return fmt.Errorf("Unsupported Token transaction currently,input: %v", string(st.Input))
+		}
+	}
+	if st.GasLimit*st.GasPrice < blockchain.MINGASLIMIT || st.GasLimit*st.GasPrice > blockchain.MAXGASLIMIT {
+		return fmt.Errorf("gas is too small or too big,gas limit:%d gas price:%d", st.GasLimit, st.GasPrice)
+	}
+
+	if err := st.VerifySign(); err != nil {
+		return err
+	}
+
+	p.qlock.Lock()
+	defer p.qlock.Unlock()
+	p.logger.Debug("add tx", zap.String("transaction", st.String()))
+
+	return p.add(st)
+}
+
+func (p *Pool) AddList(stList []transaction.SignedTransaction) []error {
 	p.qlock.Lock()
 	defer p.qlock.Unlock()
 
+	var eList []error
+	for i := 0; i < len(stList); i++ {
+		if err := stList[i].VerifySign(); err != nil {
+			err = fmt.Errorf("transaction:%s,error:%v", stList[i].String(), err)
+			eList = append(eList, err)
+			continue
+		}
+
+		if err := p.add(&stList[i]); err != nil {
+			err = fmt.Errorf("transaction:%s,error:%v", stList[i].String(), err)
+			eList = append(eList, err)
+		}
+	}
+
+	return eList
+}
+
+func (p *Pool) add(st *transaction.SignedTransaction) error {
 	if p.q.len() >= poolCap {
 		return fmt.Errorf("pool is full,please try again later")
 	}
 
 	// Check if the nonce of the transaction is required
-	if err := p.geCallerNonce(st.Caller(), st.Nonce()); err != nil {
+	if err := p.geCallerNonce(st.Caller(), st.GetNonce()); err != nil {
 		return err
 	}
 
@@ -85,9 +128,9 @@ func (p *Pool) Add(st *transaction.SignedTransaction) error {
 }
 
 func (p *Pool) geCallerNonce(caller address.Address, nonce uint64) error {
-	lastNonce := p.bc.GetNonce(caller)
+	lastNonce, _ := p.bc.GetNonce(caller)
 	if nonce < lastNonce {
-		return fmt.Errorf("transaction.nonce must be greater than the chain nonce : transaction nonce(%d) < chain nonce (%d)", lastNonce, nonce)
+		return fmt.Errorf("transaction.nonce must be greater than the chain nonce : transaction nonce(%d) chain nonce (%d)", nonce, lastNonce)
 	}
 	return nil
 }
@@ -96,6 +139,8 @@ type traderInfo struct {
 	availableBalance uint64
 	lockBalance      uint64
 	nextNonce        uint64
+	sigleLockBalance uint64
+	sigleExist       bool
 }
 
 // String
@@ -110,40 +155,49 @@ func (p *Pool) Pending() ([]transaction.SignedTransaction, error) {
 	defer p.qlock.Unlock()
 
 	traderBuffer := make(map[string]traderInfo)
-	unreadyBuffer := make([]transaction.SignedTransaction, 0)
+	i, l := 0, p.q.len()
 
-	i := 0
-	for ; i < pendingLimit && i < p.q.len(); i++ {
-		st := p.q.pop()
-
-		if n := p.compareNonce(traderBuffer, st.Caller(), st.Nonce()); n < 0 {
-			i--
-			traderInfo := p.getTraderInfo(traderBuffer, st.Caller())
-			p.logger.Error("compare nonce", zap.String("trader", traderInfo.String()), zap.String("transaction", st.Transaction.String()))
+	var badTxIdxs []int
+	a := 0
+	for ; a < PendingLimit && i < l; i++ {
+		idx := l - 1 - i
+		st := p.q.stList[idx]
+		if n := p.compareNonce(traderBuffer, st.Caller(), st.GetNonce()); n < 0 {
+			traderInfo, err := p.getTraderInfo(traderBuffer, st.Caller(), nil)
+			if err != nil {
+				p.logger.Error("getTraderInfo", zap.String("address", st.Caller().String()), zap.Error(err))
+				continue
+			}
+			p.logger.Error("compare nonce", zap.String("trader", traderInfo.String()),
+				zap.String("transaction", st.Transaction.String()))
+			badTxIdxs = append(badTxIdxs, idx)
 			continue
 		} else if n > 0 {
-			i--
-			unreadyBuffer = append(unreadyBuffer, st)
-			traderInfo := p.getTraderInfo(traderBuffer, st.Caller())
-			p.logger.Info("compare nonce", zap.String("trader", traderInfo.String()), zap.String("transaction", st.Transaction.String()))
+			traderInfo, err := p.getTraderInfo(traderBuffer, st.Caller(), nil)
+			if err != nil {
+				p.logger.Error("getTraderInfo", zap.String("address", st.Caller().String()), zap.Error(err))
+				continue
+			}
+			p.logger.Error("compare nonce", zap.String("trader", traderInfo.String()),
+				zap.String("transaction", st.Transaction.String()))
 			continue
 		}
 
 		if err := p.transactionPreCalculated(traderBuffer, st.Transaction); err != nil {
-			i--
 			p.logger.Error("pre-calculated", zap.Error(err), zap.String("transaction", st.Transaction.String()))
+			badTxIdxs = append(badTxIdxs, idx)
 			continue
 		}
-		p.pendingBuf[i] = st
+		p.pendingBuf[a] = st
+		a++
+		p.logger.Debug("success pending", zap.String("transaction", st.Transaction.String()))
 	}
 
-	p.pendingBuf = p.pendingBuf[:i]
-
-	for _, unready := range unreadyBuffer {
-		p.q.push(unready)
+	for _, idx := range badTxIdxs {
+		p.q.remove(idx)
 	}
 
-	return p.pendingBuf, nil
+	return p.pendingBuf[:a], nil
 }
 
 func (p *Pool) transactionPreCalculated(traderBuf map[string]traderInfo, tx transaction.Transaction) error {
@@ -154,7 +208,10 @@ func (p *Pool) transactionPreCalculated(traderBuf map[string]traderInfo, tx tran
 		return p.lockTransactionPreCalculated(traderBuf, tx)
 	case transaction.UnlockTransaction:
 		return p.unlockTransactionPreCalculated(traderBuf, tx)
-
+	case transaction.PledgeTrasnaction, transaction.EvmContractTransaction, transaction.EvmKtoTransaction:
+		return p.pledgeTrasnactionPreCalculated(traderBuf, tx)
+	case transaction.PledgeBreakTransaction:
+		return p.redeemTrasnactionPreCalculated(traderBuf, tx)
 	// 	TODO: Remaining types
 	default:
 		return fmt.Errorf("unknown transaction type:%d", tx.Type)
@@ -162,8 +219,15 @@ func (p *Pool) transactionPreCalculated(traderBuf map[string]traderInfo, tx tran
 }
 
 func (p *Pool) transferTransactionPreCalculated(traderBuf map[string]traderInfo, tx transaction.Transaction) error {
-	caller := p.getTraderInfo(traderBuf, tx.Caller())
-	receiver := p.getTraderInfo(traderBuf, tx.Receiver())
+	caller, err := p.getTraderInfo(traderBuf, tx.Caller(), nil)
+	if err != nil {
+		return err
+	}
+
+	receiver, err := p.getTraderInfo(traderBuf, tx.Receiver(), nil)
+	if err != nil {
+		return err
+	}
 
 	amountAndGas, err := math.AddUint64Overflow(tx.Amount, tx.GasCap())
 	if err != nil {
@@ -182,6 +246,7 @@ func (p *Pool) transferTransactionPreCalculated(traderBuf map[string]traderInfo,
 			receiver.availableBalance, tx.Amount)
 	}
 
+	caller.nextNonce++
 	caller.availableBalance = callerBal
 	receiver.availableBalance = receiverBal
 
@@ -191,7 +256,10 @@ func (p *Pool) transferTransactionPreCalculated(traderBuf map[string]traderInfo,
 }
 
 func (p *Pool) lockTransactionPreCalculated(traderBuf map[string]traderInfo, tx transaction.Transaction) error {
-	caller := p.getTraderInfo(traderBuf, tx.Caller())
+	caller, err := p.getTraderInfo(traderBuf, tx.Caller(), nil)
+	if err != nil {
+		return err
+	}
 
 	if caller.availableBalance < tx.Amount {
 		return fmt.Errorf("avaliable balance(%d) < lock amount(%d)", caller.availableBalance, tx.Amount)
@@ -212,6 +280,7 @@ func (p *Pool) lockTransactionPreCalculated(traderBuf map[string]traderInfo, tx 
 		return fmt.Errorf(err.Error()+": avaliable balance(%d) - lock amount(%d) - gas(%d)", caller.availableBalance, tx.Amount, tx.GasCap())
 	}
 
+	caller.nextNonce++
 	caller.lockBalance = lockBal
 	caller.availableBalance = avlBal
 
@@ -220,62 +289,145 @@ func (p *Pool) lockTransactionPreCalculated(traderBuf map[string]traderInfo, tx 
 }
 
 func (p *Pool) unlockTransactionPreCalculated(traderBuf map[string]traderInfo, tx transaction.Transaction) error {
-	caller := p.getTraderInfo(traderBuf, tx.Caller())
+	caller, err := p.getTraderInfo(traderBuf, tx.Caller(), &tx.To)
+	if err != nil {
+		return err
+	}
 
-	if caller.lockBalance < tx.Amount {
-		return fmt.Errorf("locked balance(%d) < lock amount(%d)", caller.lockBalance, tx.Amount)
+	if caller.sigleLockBalance < tx.Amount {
+		return fmt.Errorf("single locked balance(%d) < lock amount(%d)", caller.lockBalance, tx.Amount)
 	}
 
 	lockBal, err := math.SubUint64Overflow(caller.lockBalance, tx.Amount)
 	if err != nil {
-		return fmt.Errorf(err.Error()+": locked balance(%d) + lock amount(%d)", caller.lockBalance, tx.Amount)
+		return fmt.Errorf(err.Error()+": locked balance(%d) - lock amount(%d)", caller.lockBalance, tx.Amount)
 	}
 
-	avlBal, err := math.AddUint64Overflow(caller.availableBalance, tx.Amount)
+	singleBal, err := math.SubUint64Overflow(caller.sigleLockBalance, tx.Amount)
 	if err != nil {
-		return fmt.Errorf(err.Error()+": avaliable balance(%d) + lock amount(%d)", caller.availableBalance, tx.Amount)
+		return fmt.Errorf(err.Error()+": single locked balance(%d) - lock amount(%d)", caller.lockBalance, tx.Amount)
 	}
 
-	avlBal, err = math.SubUint64Overflow(avlBal, tx.GasCap())
+	avlBal, err := math.SubUint64Overflow(caller.availableBalance, tx.GasCap())
 	if err != nil {
 		return fmt.Errorf(err.Error()+": avalible balance(%d) + lock amount(%d) - gas(%d)", caller.availableBalance, tx.Amount, tx.GasCap())
 	}
 
+	avlBal, err = math.AddUint64Overflow(avlBal, tx.Amount)
+	if err != nil {
+		return fmt.Errorf(err.Error()+": avaliable balance(%d) + lock amount(%d)", caller.availableBalance, tx.Amount)
+	}
+
+	caller.nextNonce++
 	caller.lockBalance = lockBal
 	caller.availableBalance = avlBal
+	caller.sigleLockBalance = singleBal
 
 	traderBuf[tx.Caller().String()] = caller
 	return nil
 }
 
-func (p *Pool) getTraderInfo(traderBuf map[string]traderInfo, trader address.Address) traderInfo {
-	traderInfo, ok := traderBuf[trader.String()]
-	if ok {
-		return traderInfo
+func (p *Pool) pledgeTrasnactionPreCalculated(traderBuf map[string]traderInfo, tx transaction.Transaction) error {
+	caller, err := p.getTraderInfo(traderBuf, tx.Caller(), nil)
+	if err != nil {
+		return err
 	}
 
-	traderInfo.availableBalance = p.bc.GetAvalibleBalance(trader)
-	traderInfo.lockBalance = p.bc.GetLockBalance(trader)
-	traderInfo.nextNonce = p.bc.GetNonce(trader)
+	if caller.availableBalance < tx.Amount {
+		return fmt.Errorf("available balance(%d) < lock amount(%d)", caller.availableBalance, tx.Amount)
+	}
+
+	avlBalance, err := math.SubUint64Overflow(caller.availableBalance, tx.Amount)
+	if err != nil {
+		return fmt.Errorf(err.Error()+": availbale balance(%d) - pledge amount(%d)", caller.availableBalance, tx.Amount)
+	}
+
+	avlBalance, err = math.SubUint64Overflow(avlBalance, tx.GasCap())
+	if err != nil {
+		return fmt.Errorf(err.Error()+": availbale balance(%d) - gas fee(%d)", avlBalance, tx.GasCap())
+	}
+
+	caller.nextNonce++
+	caller.availableBalance = avlBalance
+	traderBuf[tx.Caller().String()] = caller
+
+	return nil
+}
+
+func (p *Pool) redeemTrasnactionPreCalculated(traderBuf map[string]traderInfo, tx transaction.Transaction) error {
+	if tx.Amount != 0 {
+		return fmt.Errorf("tx.Amount expect 0,tx.Amount[%v]", tx.Amount)
+	}
+
+	caller, err := p.getTraderInfo(traderBuf, tx.Caller(), nil)
+	if err != nil {
+		return err
+	}
+
+	if caller.availableBalance < tx.Amount {
+		return fmt.Errorf("available balance(%d) < lock amount(%d)", caller.availableBalance, tx.Amount)
+	}
+
+	avlBalance, err := math.SubUint64Overflow(caller.availableBalance, tx.GasCap())
+	if err != nil {
+		return fmt.Errorf(err.Error()+": availbale balance(%d) - gas fee(%d)", avlBalance, tx.GasCap())
+	}
+
+	caller.nextNonce++
+	caller.availableBalance = avlBalance
+	traderBuf[tx.Caller().String()] = caller
+	return nil
+}
+
+func (p *Pool) getTraderInfo(traderBuf map[string]traderInfo, trader address.Address, receiver *address.Address) (traderInfo, error) {
+	traderInfo, ok := traderBuf[trader.String()]
+	if ok && receiver == nil {
+		return traderInfo, nil
+	}
+
+	var err error
+	if !ok {
+		traderInfo.availableBalance, err = p.bc.GetAvailableBalance(trader)
+		if err != nil {
+			return traderInfo, err
+		}
+		traderInfo.lockBalance, err = p.bc.GetAllFreezeBalance(trader)
+		if err != nil {
+			return traderInfo, err
+		}
+		traderInfo.nextNonce, err = p.bc.GetNonce(trader)
+		if err != nil {
+			return traderInfo, err
+		}
+	}
+
+	if receiver != nil && !traderInfo.sigleExist {
+		traderInfo.sigleLockBalance, err = p.bc.GetSingleFreezeBalance(trader, *receiver)
+		if err != nil {
+			return traderInfo, err
+		}
+		traderInfo.sigleExist = true
+	}
+
 	traderBuf[trader.String()] = traderInfo
 
-	return traderInfo
+	return traderInfo, nil
 }
 
 // if nonce > nextnonce return 1
 //    nonce = nextnonce return 0
 //    nonce < nextnonce return -1
 func (p *Pool) compareNonce(traderBuf map[string]traderInfo, trader address.Address, nonce uint64) int {
-	traderInfo := p.getTraderInfo(traderBuf, trader)
+	traderInfo, err := p.getTraderInfo(traderBuf, trader, nil)
+	if err != nil {
+		p.logger.Error("compareNonce", zap.Error(err))
+	}
 
 	if nonce < traderInfo.nextNonce {
 		return -1
 	} else if nonce > traderInfo.nextNonce {
 		return 1
 	}
-
-	traderInfo.nextNonce += 1
-	traderBuf[trader.String()] = traderInfo
 
 	return 0
 }
@@ -292,33 +444,124 @@ func (p *Pool) FilterTransaction(stList []transaction.SignedTransaction) {
 		}
 
 		for _, rst := range rstList {
-			if st.Nonce() == rst.nonce {
+			if st.GetNonce() == rst.nonce {
 				p.q.remove(rst.idx)
 			}
 		}
 	}
+
+	p.cacheOutSignedTransaction()
 }
 
 // TransctionCacheOut  Eliminate transactions in the transaction pool
-func (p *Pool) CacheOutSignedTransaction() error {
-	p.qlock.Lock()
-	defer p.qlock.Unlock()
-
-	if p.q.len() > poolCap/2 {
-		for i := p.q.len() / 2; i < p.q.len(); i++ {
-			st := p.q.stList[i]
-			rst, err := p.q.getIndex(st.Caller().String(), st.Nonce())
-			if err != nil {
-				return err
-			}
-
-			if rst.timestamp > time.Now().Second()-timesub {
-				break
-			}
-
-			p.q.remove(i)
+func (p *Pool) cacheOutSignedTransaction() error {
+	for k, v := range p.q.timeBuffer {
+		if v > time.Now().Unix()-3*timesub {
+			continue
 		}
+
+		delete(p.q.timeBuffer, k)
+
+		caller, nonce, err := parseKey(k)
+		if err != nil {
+			p.logger.Error("CacheOutSignedTransaction,parseKey", zap.Error(err))
+			continue
+		}
+
+		addr, err := address.NewAddrFromString(caller)
+		if err != nil {
+			p.logger.Error("CacheOutSignedTransaction,NewAddrFromString", zap.Error(err))
+			continue
+		}
+
+		idx, ok := p.findSignedTransactionIdx(addr, nonce)
+		if !ok {
+			continue
+		}
+
+		p.q.remove(idx)
+		p.logger.Debug("remove tx", zap.String("addr", addr.String()), zap.Uint64("nonce", nonce))
+	}
+
+	for p.q.len() > poolCap/3*2 {
+		p.logger.Debug("remove tx", zap.String("addr", p.q.stList[0].Caller().String()), zap.Uint64("nonce", p.q.stList[0].GetNonce()))
+		p.q.remove(0)
 	}
 
 	return nil
+}
+
+func (p *Pool) findSignedTransactionIdx(addr address.Address, nonce uint64) (int, bool) {
+	list, ok := p.q.rstBuffer[addr.String()]
+	if !ok {
+		return -1, false
+	}
+
+	for _, rst := range list {
+		if rst.nonce == nonce {
+			if p.q.len() <= rst.idx {
+				break
+			}
+
+			return rst.idx, true
+		}
+	}
+	return -1, false
+}
+
+func (p *Pool) FindSignedTransaction(addr address.Address, nonce uint64) (*transaction.SignedTransaction, bool) {
+	p.qlock.Lock()
+	defer p.qlock.Unlock()
+
+	list, ok := p.q.rstBuffer[addr.String()]
+	if !ok {
+		return nil, false
+	}
+
+	for _, rst := range list {
+		if rst.nonce == nonce {
+			if p.q.len() <= rst.idx {
+				break
+			}
+
+			return &p.q.stList[rst.idx], true
+		}
+	}
+
+	return nil, false
+}
+
+func (p *Pool) CopySignedTransactions() []transaction.SignedTransaction {
+	p.qlock.Lock()
+	defer p.qlock.Unlock()
+
+	stc := make([]transaction.SignedTransaction, p.q.len())
+
+	copy(stc, p.q.stList)
+	return stc
+}
+
+func (p *Pool) GetTxByHash(hash string) (*transaction.SignedTransaction, error) {
+	p.qlock.Lock()
+	defer p.qlock.Unlock()
+
+	addrStr, nonce, err := p.q.getAddrAndNonceByHash(hash)
+	if err != nil {
+		return nil, err
+	}
+	addr, err := address.NewAddrFromString(addrStr)
+	if err != nil {
+		return nil, err
+	}
+
+	idx, ok := p.findSignedTransactionIdx(addr, nonce)
+	if !ok {
+		return nil, fmt.Errorf("not exist")
+	}
+
+	if idx > len(p.q.stList) || p.q.stList[idx].HashToString() != hash {
+		return nil, fmt.Errorf("not exist")
+	}
+
+	return &p.q.stList[idx], nil
 }

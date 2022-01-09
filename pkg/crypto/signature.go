@@ -1,22 +1,25 @@
 package crypto
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 
 	cbg "github.com/whyrusleeping/cbor-gen"
 )
 
-type SigType int
+type SigType = byte
 
 const (
-	ED25519 SigType = iota
-	ETH_ED25519
-	ECDSA
+	TypeSecp256k1 SigType = iota
+	TypeED25519
+	TypeMutil
+
+	TypeUnknown = 255
 )
 
 const (
-	SignatureMaxLength = 64
+	SignatureMaxLength = 130 //(secp sign len) 65*2
 )
 
 type Signature struct {
@@ -71,14 +74,38 @@ func (s *Signature) UnmarshalCBOR(r io.Reader) error {
 	}
 
 	switch SigType(buf[0]) {
-	case ED25519:
-		s.SigType = ED25519
+	case TypeED25519:
+		s.SigType = TypeED25519
+	case TypeSecp256k1:
+		s.SigType = TypeSecp256k1
+	case TypeMutil:
+		s.SigType = TypeMutil
 	default:
 		return fmt.Errorf("unkown signature type")
 	}
 	s.Data = buf[1:]
 
 	return nil
+}
+
+// Serialize Signature in the cbor format
+func (s *Signature) Serialize() ([]byte, error) {
+	buf := bytes.NewBuffer(nil)
+	if err := s.MarshalCBOR(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// DeserializeSignature deserializes binary data in cbor format into
+// Signature, and returns an error if the data format is incorrect
+func DeserializeSignature(data []byte) (*Signature, error) {
+	s := &Signature{}
+	buf := bytes.NewBuffer(data)
+	if err := s.UnmarshalCBOR(buf); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 func (s *Signature) String() string {

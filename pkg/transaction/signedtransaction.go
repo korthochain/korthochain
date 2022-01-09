@@ -2,42 +2,18 @@ package transaction
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
 
-	"github.com/korthochain/korthochain/pkg/address"
 	"github.com/korthochain/korthochain/pkg/crypto"
 
 	cbg "github.com/whyrusleeping/cbor-gen"
 )
 
 type SignedTransaction struct {
-	Transaction Transaction
-	Signature   crypto.Signature
-}
-
-func (st *SignedTransaction) Caller() address.Address {
-	return st.Transaction.Caller()
-}
-
-func (st *SignedTransaction) Nonce() uint64 {
-	return st.Transaction.Nonce
-}
-
-func (st *SignedTransaction) GasCap() uint64 {
-	return st.Transaction.GasCap()
-}
-
-func (st *SignedTransaction) Hash() []byte {
-	data, err := st.Serialize()
-	if err != nil {
-		panic(err)
-	}
-
-	hash := sha256.Sum256(data)
-	return hash[:]
+	Transaction
+	Signature crypto.Signature
 }
 
 func (st *SignedTransaction) Serialize() ([]byte, error) {
@@ -110,8 +86,7 @@ func (st *SignedTransaction) UnmarshalCBOR(r io.Reader) error {
 }
 
 func (st *SignedTransaction) String() string {
-	//TODO:string
-	return fmt.Sprintf("{Transaction:%s,Signature:%s}", st.Transaction.String(), st.Signature.String())
+	return fmt.Sprintf("Transaction:{%s} , Hash:%s", st.Transaction.String(), st.HashToString())
 }
 
 func (st *SignedTransaction) GetTransaction() Transaction {
